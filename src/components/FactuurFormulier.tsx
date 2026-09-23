@@ -1,4 +1,5 @@
 import { STATUS_LABELS, type FactuurData, type FactuurStatus, type VeldFouten } from "../types";
+import { useState } from "react";
 import NummerInput from "./NummerInput";
 
 interface Props {
@@ -22,6 +23,8 @@ interface Props {
   opslaan: boolean;
   /** Extra blokken onder de btw-regels (signalen e.d.). */
   children?: React.ReactNode;
+  /** Tijdlijn voor de tab "Historie" (alleen bij bestaande facturen). */
+  historie?: React.ReactNode;
 }
 
 function Label({ children, ontbreekt }: { children: React.ReactNode; ontbreekt?: boolean }) {
@@ -53,7 +56,9 @@ export default function FactuurFormulier({
   bewerken,
   opslaan,
   children,
+  historie,
 }: Props) {
+  const [tab, setTab] = useState<"gegevens" | "historie">("gegevens");
   const zet = <K extends keyof FactuurData>(veld: K, waarde: FactuurData[K]) =>
     onChange({ ...factuur, [veld]: waarde });
 
@@ -101,6 +106,34 @@ export default function FactuurFormulier({
         </div>
       </div>
 
+      {historie && (
+        <div role="tablist" className="mb-4 flex gap-1 border-b border-slate-100">
+          {(
+            [
+              ["gegevens", "Gegevens"],
+              ["historie", "Historie"],
+            ] as const
+          ).map(([sleutel, label]) => (
+            <button
+              key={sleutel}
+              type="button"
+              role="tab"
+              aria-selected={tab === sleutel}
+              onClick={() => setTab(sleutel)}
+              className={`-mb-px border-b-2 px-3 py-1.5 text-sm font-medium ${
+                tab === sleutel ? "border-slate-900 text-slate-900" : "border-transparent text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {tab === "historie" && historie ? (
+        <div className="min-h-[8rem]">{historie}</div>
+      ) : (
+      <>
       {alleenLezen && (
         <p className="mb-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
           Deze factuur is betaald en kan niet meer worden gewijzigd.
@@ -283,6 +316,8 @@ export default function FactuurFormulier({
 
       {waarschuwing && !alleenLezen && (
         <p className="mt-5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{waarschuwing}</p>
+      )}
+      </>
       )}
 
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">

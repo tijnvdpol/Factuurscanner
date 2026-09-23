@@ -3,18 +3,22 @@ import type { Session } from "@supabase/supabase-js";
 import FacturenPagina from "./components/FacturenPagina";
 import GrootboekBeheer from "./components/GrootboekBeheer";
 import LedenBeheer from "./components/LedenBeheer";
+import AuditLogPagina from "./components/AuditLogPagina";
+import type { WeergaveContext } from "./lib/audit";
+import { rekeningNaam } from "./lib/codering";
 import type { OrganisatieContext } from "./components/OrganisatiePoort";
 import { haalRekeningenOp } from "./lib/grootboekApi";
 import { haalOrgGebruikersOp } from "./lib/organisatieApi";
 import { supabase } from "./lib/supabase";
 import { ROL_LABELS, type Grootboekrekening, type OrgGebruiker, type Rol } from "./types";
 
-type Pagina = "facturen" | "grootboek" | "leden";
+type Pagina = "facturen" | "grootboek" | "leden" | "audit";
 
 const PAGINAS: { sleutel: Pagina; label: string; rollen: Rol[] | null }[] = [
   { sleutel: "facturen", label: "Facturen", rollen: null },
   { sleutel: "grootboek", label: "Grootboekrekeningen", rollen: null },
   { sleutel: "leden", label: "Leden", rollen: ["beheerder"] },
+  { sleutel: "audit", label: "Audit log", rollen: ["controller", "beheerder"] },
 ];
 
 interface Props extends OrganisatieContext {
@@ -43,6 +47,15 @@ export default function App({ sessie, lidmaatschap, lidmaatschappen, onWissel, o
       .then(setGebruikers)
       .catch((err) => console.warn("Leden laden mislukt:", err));
   }, [organisatieId]);
+
+  const weergave: WeergaveContext = {
+    naamVan: (userId) =>
+      gebruikers.find((g) => g.user_id === userId)?.email ?? (userId === sessie.user.id ? sessie.user.email : undefined),
+    rekeningNaam: (id) => {
+      const rekening = rekeningen.find((r) => r.id === id);
+      return rekening ? rekeningNaam(rekening) : undefined;
+    },
+  };
 
   const zichtbarePaginas = PAGINAS.filter((p) => !p.rollen || p.rollen.includes(lidmaatschap.rol));
   const actievePagina = zichtbarePaginas.some((p) => p.sleutel === pagina) ? pagina : "facturen";
@@ -101,7 +114,13 @@ export default function App({ sessie, lidmaatschap, lidmaatschappen, onWissel, o
 
       <main className="mx-auto max-w-5xl space-y-6 px-4 py-6">
         {actievePagina === "facturen" && (
-          <FacturenPagina sessie={sessie} lidmaatschap={lidmaatschap} rekeningen={rekeningen} gebruikers={gebruikers} />
+          <FacturenPagina
+            sessie={sessie}
+            lidmaatschap={lidmaatschap}
+            rekeningen={rekeningen}
+            gebruikers={gebruikers}
+            weergave={weergave}
+          />
         )}
         {actievePagina === "grootboek" && (
           <GrootboekBeheer
@@ -110,6 +129,9 @@ export default function App({ sessie, lidmaatschap, lidmaatschappen, onWissel, o
             magBeheren={lidmaatschap.rol === "beheerder" || lidmaatschap.rol === "controller"}
             onGewijzigd={vernieuwRekeningen}
           />
+        )}
+        {actievePagina === "audit" && (
+          <AuditLogPagina organisatieId={organisatieId} gebruikers={gebruikers} weergave={weergave} />
         )}
         {actievePagina === "leden" && (
           <LedenBeheer

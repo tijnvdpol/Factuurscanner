@@ -5,6 +5,8 @@ import FactuurFormulier from "./FactuurFormulier";
 import FacturenTabel from "./FacturenTabel";
 import SignalenBlok from "./SignalenBlok";
 import CoderingVeld from "./CoderingVeld";
+import HistorieTijdlijn from "./HistorieTijdlijn";
+import type { WeergaveContext } from "../lib/audit";
 import { voorspelSignalen } from "../lib/signalen";
 import { kiesCoderingsvoorstel } from "../lib/codering";
 import { haalHistorieVoorstel } from "../lib/grootboekApi";
@@ -96,13 +98,14 @@ interface Props {
   lidmaatschap: Lidmaatschap;
   rekeningen: Grootboekrekening[];
   gebruikers: OrgGebruiker[];
+  weergave: WeergaveContext;
 }
 
 function datum(iso: string | null): string {
   return iso ? new Date(iso).toLocaleDateString("nl-NL", { dateStyle: "medium" }) : "";
 }
 
-export default function FacturenPagina({ sessie, lidmaatschap, rekeningen, gebruikers }: Props) {
+export default function FacturenPagina({ sessie, lidmaatschap, rekeningen, gebruikers, weergave }: Props) {
   const organisatieId = lidmaatschap.organisatie_id;
   const [bezigId, setBezigId] = useState<string | null>(null);
   const [facturen, setFacturen] = useState<Factuur[]>([]);
@@ -117,11 +120,7 @@ export default function FacturenPagina({ sessie, lidmaatschap, rekeningen, gebru
   const [melding, setMelding] = useState<string | null>(null);
   const [concept, setConcept] = useState<Concept | null>(null);
 
-  const naamVan = useCallback(
-    (userId: string) =>
-      gebruikers.find((g) => g.user_id === userId)?.email ?? (userId === sessie.user.id ? sessie.user.email : undefined),
-    [gebruikers, sessie.user.id, sessie.user.email],
-  );
+  const naamVan = weergave.naamVan;
 
   const vernieuw = useCallback(async () => {
     try {
@@ -444,6 +443,16 @@ export default function FacturenPagina({ sessie, lidmaatschap, rekeningen, gebru
           statusInfo={statusInfo}
           waarschuwing={terugvalWaarschuwing}
           alleenLezen={conceptStatus === "betaald"}
+          historie={
+            conceptFactuur ? (
+              <HistorieTijdlijn
+                factuurId={conceptFactuur.id}
+                weergave={weergave}
+                // opnieuw laden na elke wijziging (status, signalen, inhoud)
+                versie={`${conceptFactuur.status}|${conceptFactuur.signalen.filter((s) => s.opgelost).length}|${JSON.stringify(alleenFactuurData(conceptFactuur))}`}
+              />
+            ) : undefined
+          }
           onOpslaan={slaConceptOp}
           onAnnuleren={annuleerConcept}
           opslaan={opslaan}

@@ -205,3 +205,37 @@ Per keuze: **wat** er gekozen is, **waarom**, en welk **alternatief** is afgewog
 - Per factuur alleen de knoppen die bij de rol en status passen (`mogelijkeActies`, pure functie). Een geblokkeerde goedkeuring staat grijs met de reden eronder, bijv. "Boven je goedkeuringslimiet van € 5.000".
 - Afkeuren vraagt de reden via `window.prompt`. Dat past bij het bestaande `window.confirm`-patroon.
 - De kolommen "Excl. BTW" en "Valuta" zijn uit de tabel gehaald om ruimte te maken voor de acties. Een afwijkende valuta staat bij het totaal, en beide velden blijven in de CSV.
+
+## Fase 3.3: audit trail
+
+### B43. Eén generieke logtrigger (security definer)
+- **Wat:** `intern.log_wijziging()` hangt aan `facturen`, `btw_regels`, `leveranciers`, `factuur_signalen` en `organisatie_leden`.
+  - Bij INSERT/DELETE wordt de hele rij opgeslagen, bij UPDATE alleen de gewijzigde velden (`updated_at` telt niet mee). Een update zonder echte wijziging levert geen regel op.
+  - `record_id` = `id` van de rij. Voor `organisatie_leden` (zonder eigen id) is dat de `user_id` van het lid.
+- **Waarom één functie:** hetzelfde gedrag voor elke tabel, en minder code.
+
+### B44. Statuswijziging en toelichting via transactie-instellingen
+- **Wat:** `wijzig_status` zet `factuurscanner.audit_actie = 'statuswijziging'` en `factuurscanner.audit_toelichting` (reden van afkeuren en/of de melding "Functiescheiding niet mogelijk: organisatie heeft één lid"). De automatische terugval naar gescand zet een eigen toelichting. De logtrigger gebruikt de toelichting één keer (alleen voor `facturen`) en wist hem daarna, zodat hij niet "doorlekt" naar latere regels in dezelfde transactie.
+- **Alternatief:** `wijzig_status` zelf laten loggen. Dat geeft dubbele regels naast de trigger.
+
+### B45. Alleen toevoegen, ook voor beheerders van de database
+- **Wat:** `authenticated` heeft alleen SELECT (RLS: leden van de organisatie). INSERT gebeurt uitsluitend via de triggerfunctie (security definer). Triggers weigeren UPDATE, DELETE en TRUNCATE, ook voor de service role en de SQL Editor.
+- **Geen foreign keys** op `audit_log`: de historie blijft staan als een factuur, account of organisatie verdwijnt.
+- **Id** = `bigint identity`: een betrouwbare volgorde binnen één transactie (`created_at` is daar gelijk).
+
+### B46. Geen ruis bij cascade-verwijderen
+- **Wat:** wordt een factuur verwijderd, dan worden de meeverwijderde btw-regels en signalen niet apart gelogd; het verwijderen van de factuur staat met de volledige oude rij in de log. De controle is "bestaat de factuur nog?". `pg_trigger_depth()` bleek niet betrouwbaar voor cascade-deletes, want AFTER-triggers van de cascade vuren op diepte 1.
+
+### B47. Historie per factuur via `factuur_historie(factuur_id)`
+- **Wat:** een RPC (security invoker, dus RLS geldt) die de regels van de factuur, de btw-regels en de signalen verzamelt. Signaalupdates bevatten alleen gewijzigde velden (geen `factuur_id`), dus die worden via `record_id` gekoppeld.
+
+### B48. UI
+- **Tab "Historie"** in het bewerkscherm: een tijdlijn (nieuwste boven) met wie, wanneer, een omschrijving ("Status: Gescand → Gecontroleerd") en per veld "van → naar" met Nederlandse veldnamen, bedragen in €, namen in plaats van user-id's en grootboekcode in plaats van id.
+- **Scherm "Audit log"** (controller en beheerder): filters op periode (standaard de laatste 30 dagen), gebruiker (ook oud-leden), actie en onderdeel, plus export naar CSV (puntkomma, UTF-8 met BOM, zoals de factuurexport). Maximaal 1000 regels per keer, met een melding als dat maximum bereikt is.
+- De RLS staat SELECT toe voor alle leden (zoals gevraagd). Het aparte scherm is alleen zichtbaar voor controller en beheerder. Andere leden zien alleen de historie per factuur.
+
+### B49. Geen historie van vóór de audit trail
+- Bestaande facturen hebben pas historie vanaf het moment dat de migratie draait. De tijdlijn meldt dat als er nog niets is.
+
+### B50. Handtest voor productie
+- `supabase/handtests/fase2_3_workflow.sql` (15 tests: signalen, RLS tussen organisaties, functiescheiding, limiet, kritiek signaal, terugval, audit log onveranderlijk) draait ook automatisch op PGlite.

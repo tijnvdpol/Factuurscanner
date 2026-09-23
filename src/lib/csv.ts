@@ -78,7 +78,11 @@ export function downloadCsv(
   rekeningen: Grootboekrekening[] = [],
   bestandsnaam = "facturen.csv",
 ): void {
-  const inhoud = genereerCsv(facturen, rekeningen);
+  downloadTekst(genereerCsv(facturen, rekeningen), bestandsnaam);
+}
+
+/** Biedt een CSV-tekst aan als download. */
+export function downloadTekst(inhoud: string, bestandsnaam: string): void {
   // BOM zodat Excel de UTF-8 tekens (bijv. €) correct interpreteert
   const blob = new Blob(["﻿" + inhoud], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
