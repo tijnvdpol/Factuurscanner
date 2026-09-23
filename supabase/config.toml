@@ -1,0 +1,7 @@
+# Minimale Supabase CLI-configuratie (alleen nodig voor het deployen van Edge Functions).
+project_id = "factuurscanner"
+
+[functions.scan-factuur]
+# De JWT wordt in de functie zelf gecontroleerd via de Auth-server. De ingebouwde gateway-controle
+# werkt niet met de nieuwe (asymmetrische) JWT-sleutels / publishable keys, dus die staat uit.
+verify_jwt = false
