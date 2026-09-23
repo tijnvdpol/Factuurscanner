@@ -4,10 +4,11 @@
 //   200 { factuur: FactuurData, model: string }   (model = het model dat de scan heeft gedaan)
 //   4xx/5xx { error: string }  (Nederlandse foutmelding voor de gebruiker)
 //
-// Het model wordt automatisch gekozen: de modellen worden op volgorde geprobeerd en bij een model dat
-// niet bereikbaar is (bestaat niet, limiet bereikt, overbelast, time-out) wordt naar het volgende geschakeld.
+// Het model wordt automatisch gekozen: de functie vraagt bij Google op welke modellen beschikbaar zijn,
+// probeert ze op volgorde en schakelt door bij een model dat niet bereikbaar is (bestaat niet/ingetrokken,
+// limiet bereikt, overbelast, time-out).
 //
-// Secrets: GEMINI_API_KEY (zelf instellen), optioneel GEMINI_MODELLEN (kommagescheiden volgorde).
+// Secrets: GEMINI_API_KEY (zelf instellen), optioneel GEMINI_MODELLEN (kommagescheiden voorkeursvolgorde).
 // SUPABASE_URL en SUPABASE_ANON_KEY zet Supabase automatisch.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
@@ -15,9 +16,17 @@ import { encodeBase64 } from "jsr:@std/encoding@1/base64";
 import { type FactuurData, normaliseerFactuur, PROMPT, RESPONSE_SCHEMA } from "../_shared/gemini.ts";
 
 const BUCKET = "facturen";
-const STANDAARD_MODELLEN = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
+const GEMINI_API = "https://generativelanguage.googleapis.com/v1beta";
+// Voorkeur; daarna volgen automatisch de overige beschikbare stabiele Flash-modellen.
+const VOORKEUR_MODELLEN = ["gemini-3.6-flash"];
+// Alleen gebruikt als de lijst met beschikbare modellen niet opgevraagd kan worden.
+const NOODLIJST = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"];
+const MAX_MODELLEN = 4;
+const CACHE_MS = 60 * 60 * 1000;
 // Alleen Gemini-modellen, en niets dat het URL-pad kan manipuleren.
 const MODEL_PATROON = /^gemini-[a-z0-9][a-z0-9.-]*$/;
+// Stabiele (geen preview/experimentele) Flash-modellen, bijv. gemini-3.5-flash of gemini-3.5-flash-lite.
+const STABIEL_FLASH = /^gemini-(\d+(?:\.\d+)?)-flash(-lite)?$/;
 const MAX_BYTES = 15 * 1024 * 1024;
 // Edge Functions hebben een maximale looptijd; binnen dit budget blijven voor alle pogingen samen.
 const TIJDBUDGET_MS = 130_000;
@@ -57,13 +66,74 @@ function mimeTypeVoor(pad: string, blobType: string): string {
   return MIME_TYPES[extensie] ?? "application/octet-stream";
 }
 
-/** Volgorde van modellen: uit het secret GEMINI_MODELLEN, anders de standaardlijst. */
-function modelVolgorde(): string[] {
-  const modellen = (Deno.env.get("GEMINI_MODELLEN") ?? "")
+// Per instantie van de functie gecachet (instanties worden hergebruikt tussen aanroepen).
+let beschikbaarCache: { modellen: Set<string>; geldigTot: number } | null = null;
+const overslaanTot = new Map<string, number>(); // model -> tijdstip; voor modellen die "niet beschikbaar" gaven
+
+/** Vraagt bij Google op welke modellen generateContent ondersteunen; null als dat niet lukt. */
+async function beschikbareModellen(geminiKey: string): Promise<Set<string> | null> {
+  if (beschikbaarCache && beschikbaarCache.geldigTot > Date.now()) return beschikbaarCache.modellen;
+  try {
+    const response = await fetch(`${GEMINI_API}/models?pageSize=1000`, {
+      headers: { "x-goog-api-key": geminiKey },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) throw new Error(`ListModels ${response.status}`);
+    const data = await response.json();
+    const modellen = new Set<string>(
+      (data?.models ?? [])
+        .filter((m: { supportedGenerationMethods?: string[] }) =>
+          m.supportedGenerationMethods?.includes("generateContent")
+        )
+        .map((m: { name?: string }) => String(m.name ?? "").replace(/^models\//, ""))
+        .filter((naam: string) => MODEL_PATROON.test(naam)),
+    );
+    if (modellen.size === 0) throw new Error("ListModels gaf geen bruikbare modellen");
+    beschikbaarCache = { modellen, geldigTot: Date.now() + CACHE_MS };
+    return modellen;
+  } catch (err) {
+    console.warn("Beschikbare modellen opvragen mislukt, noodlijst wordt gebruikt:", err);
+    return null;
+  }
+}
+
+/** Sorteert stabiele Flash-modellen: nieuwste versie eerst, lite-varianten na de gewone. */
+function sorteerFlash(a: string, b: string): number {
+  const [, versieA, liteA] = a.match(STABIEL_FLASH)!;
+  const [, versieB, liteB] = b.match(STABIEL_FLASH)!;
+  if (!!liteA !== !!liteB) return liteA ? 1 : -1;
+  return Number(versieB) - Number(versieA);
+}
+
+/** Volgorde van te proberen modellen: voorkeur (of GEMINI_MODELLEN), aangevuld met beschikbare Flash-modellen. */
+async function modelVolgorde(geminiKey: string): Promise<string[]> {
+  const eigen = (Deno.env.get("GEMINI_MODELLEN") ?? "")
     .split(",")
     .map((m) => m.trim())
     .filter((m) => MODEL_PATROON.test(m));
-  return modellen.length > 0 ? modellen : STANDAARD_MODELLEN;
+  const voorkeur = eigen.length > 0 ? eigen : VOORKEUR_MODELLEN;
+
+  const beschikbaar = await beschikbareModellen(geminiKey);
+  const kandidaten = beschikbaar
+    ? [
+        ...voorkeur.filter((m) => beschikbaar.has(m)),
+        ...[...beschikbaar].filter((m) => STABIEL_FLASH.test(m) && !voorkeur.includes(m)).sort(sorteerFlash),
+      ]
+    : [...new Set([...voorkeur, ...NOODLIJST])];
+
+  const nu = Date.now();
+  const bruikbaar = kandidaten.filter((m) => (overslaanTot.get(m) ?? 0) <= nu);
+  // Als alles tijdelijk overgeslagen wordt, toch opnieuw proberen i.p.v. direct op te geven.
+  return (bruikbaar.length > 0 ? bruikbaar : kandidaten).slice(0, MAX_MODELLEN);
+}
+
+/** Korte Nederlandse reden per mislukte poging, voor de samenvattende foutmelding. */
+function korteReden(poging: { status: number; melding: string }): string {
+  if (poging.status === 404) return "niet (meer) beschikbaar";
+  if (poging.status === 429) return "limiet bereikt";
+  if (poging.status === 504 || poging.status === 408) return "reageerde niet op tijd";
+  if (poging.status >= 500 && poging.status !== 502) return "overbelast of storing";
+  return poging.melding;
 }
 
 type Poging =
@@ -74,7 +144,7 @@ type Poging =
 async function scanMetModel(model: string, geminiKey: string, body: unknown, timeoutMs: number): Promise<Poging> {
   let response: Response;
   try {
-    response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+    response = await fetch(`${GEMINI_API}/models/${model}:generateContent`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": geminiKey },
       body: JSON.stringify(body),
@@ -202,8 +272,8 @@ Deno.serve(async (req) => {
   };
 
   // 4. Gemini aanroepen; bij een onbereikbaar model automatisch het volgende proberen
-  const mislukt: Array<Extract<Poging, { ok: false }>> = [];
-  for (const model of modelVolgorde()) {
+  const mislukt: Array<Extract<Poging, { ok: false }> & { model: string }> = [];
+  for (const model of await modelVolgorde(geminiKey)) {
     const resterend = TIJDBUDGET_MS - (Date.now() - start);
     if (resterend < MIN_POGING_MS) break;
 
@@ -214,7 +284,8 @@ Deno.serve(async (req) => {
     }
 
     console.error(`Gemini-fout bij ${model}`, poging.status, poging.melding);
-    mislukt.push(poging);
+    mislukt.push({ ...poging, model });
+    if (poging.status === 404) overslaanTot.set(model, Date.now() + CACHE_MS);
 
     if (!poging.volgendeProberen) {
       if (poging.status === 401 || poging.status === 403 || /api key/i.test(poging.melding)) {
@@ -227,6 +298,6 @@ Deno.serve(async (req) => {
   if (mislukt.length > 0 && mislukt.every((p) => p.status === 429)) {
     return fout(429, "Alle Gemini-modellen hebben hun limiet bereikt. Wacht even en probeer het opnieuw.");
   }
-  const laatste = mislukt.at(-1)?.melding ?? "tijdslimiet bereikt";
-  return fout(502, `Geen enkel Gemini-model kon de factuur verwerken (${laatste}). Probeer het later opnieuw.`);
+  const redenen = mislukt.map((p) => `${p.model}: ${korteReden(p)}`).join("; ") || "tijdslimiet bereikt";
+  return fout(502, `Geen enkel Gemini-model kon de factuur verwerken (${redenen}). Probeer het later opnieuw.`);
 });

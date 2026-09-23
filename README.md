@@ -40,8 +40,11 @@ npm.cmd run dev          # http://localhost:5173
    - Redirect URLs: `http://localhost:5173` en de Vercel-URL
    - "Confirm email" aan laten
 6. **Secret zetten**: onder *Edge Functions → Secrets* een secret `GEMINI_API_KEY` aanmaken.
-   - Het model wordt automatisch gekozen. De functie probeert `gemini-3.6-flash`, dan `gemini-2.5-flash` en dan `gemini-2.5-flash-lite`, en schakelt naar het volgende model als een model niet bestaat, de limiet bereikt heeft, overbelast is of niet op tijd reageert.
-   - Optioneel stel je een andere volgorde in met het secret `GEMINI_MODELLEN`, bijvoorbeeld `gemini-3.6-flash,gemini-2.5-flash`.
+   - Het model wordt automatisch gekozen:
+     - De functie vraagt bij Google op welke modellen beschikbaar zijn en bewaart die lijst een uur.
+     - Ze probeert eerst `gemini-3.6-flash`, daarna de overige stabiele Flash-modellen (nieuwste eerst, lite-varianten achteraan), met maximaal 4 pogingen.
+     - Ze schakelt naar het volgende model als een model is ingetrokken, de limiet heeft bereikt, overbelast is of niet op tijd reageert. Een ingetrokken model wordt daarna een uur overgeslagen.
+   - Optioneel stel je een eigen voorkeursvolgorde in met het secret `GEMINI_MODELLEN`, bijvoorbeeld `gemini-3.6-flash,gemini-3.5-flash`.
 7. **Edge Function deployen** (vanuit deze map, commando's één voor één):
    ```powershell
    npx.cmd supabase login
