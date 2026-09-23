@@ -1,14 +1,18 @@
-import type { FactuurData, VeldFouten } from "../types";
+import { STATUSSEN, STATUS_LABELS, type FactuurData, type FactuurStatus, type VeldFouten } from "../types";
 import NummerInput from "./NummerInput";
 
 interface Props {
   factuur: FactuurData;
   fouten: VeldFouten;
   onChange: (bijgewerkt: FactuurData) => void;
+  status: FactuurStatus;
+  onStatusChange: (status: FactuurStatus) => void;
   onOpslaan: () => void;
   onAnnuleren: () => void;
   bestandsnaam?: string;
+  onBekijkOrigineel?: () => void;
   bewerken: boolean;
+  opslaan: boolean;
 }
 
 function Label({ children, ontbreekt }: { children: React.ReactNode; ontbreekt?: boolean }) {
@@ -28,10 +32,14 @@ export default function FactuurFormulier({
   factuur,
   fouten,
   onChange,
+  status,
+  onStatusChange,
   onOpslaan,
   onAnnuleren,
   bestandsnaam,
+  onBekijkOrigineel,
   bewerken,
+  opslaan,
 }: Props) {
   const zet = <K extends keyof FactuurData>(veld: K, waarde: FactuurData[K]) =>
     onChange({ ...factuur, [veld]: waarde });
@@ -59,11 +67,22 @@ export default function FactuurFormulier({
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex items-center justify-between gap-3">
         <h2 className="text-sm font-semibold text-slate-800">
           {bewerken ? "Factuur bewerken" : "Controleer gescande gegevens"}
         </h2>
-        {bestandsnaam && <span className="truncate text-xs text-slate-400">{bestandsnaam}</span>}
+        <div className="flex min-w-0 items-center gap-2">
+          {bestandsnaam && <span className="truncate text-xs text-slate-400">{bestandsnaam}</span>}
+          {onBekijkOrigineel && (
+            <button
+              type="button"
+              onClick={onBekijkOrigineel}
+              className="shrink-0 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+            >
+              Origineel bekijken
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -89,27 +108,41 @@ export default function FactuurFormulier({
           />
         </div>
 
-        <div>
-          <Label ontbreekt={!factuur.factuurdatum}>Factuurdatum</Label>
-          <input
-            type="date"
-            value={factuur.factuurdatum ?? ""}
-            onChange={(e) => zet("factuurdatum", e.target.value || null)}
-            className={inputKlasse(fouten["factuurdatum"])}
-          />
-          {fouten["factuurdatum"] && <p className="mt-1 text-xs text-red-600">{fouten["factuurdatum"]}</p>}
-        </div>
+        <div className="grid grid-cols-1 gap-4 sm:col-span-2 sm:grid-cols-3">
+          <div>
+            <Label ontbreekt={!factuur.factuurdatum}>Factuurdatum</Label>
+            <input
+              type="date"
+              value={factuur.factuurdatum ?? ""}
+              onChange={(e) => zet("factuurdatum", e.target.value || null)}
+              className={inputKlasse(fouten["factuurdatum"])}
+            />
+            {fouten["factuurdatum"] && <p className="mt-1 text-xs text-red-600">{fouten["factuurdatum"]}</p>}
+          </div>
 
-        <div>
-          <Label ontbreekt={!factuur.valuta}>Valuta</Label>
-          <input
-            type="text"
-            value={factuur.valuta ?? ""}
-            onChange={(e) => zet("valuta", e.target.value.toUpperCase() || null)}
-            className={inputKlasse()}
-            placeholder="EUR"
-            maxLength={3}
-          />
+          <div>
+            <Label ontbreekt={!factuur.vervaldatum}>Vervaldatum</Label>
+            <input
+              type="date"
+              value={factuur.vervaldatum ?? ""}
+              onChange={(e) => zet("vervaldatum", e.target.value || null)}
+              className={inputKlasse(fouten["vervaldatum"])}
+            />
+            {fouten["vervaldatum"] && <p className="mt-1 text-xs text-red-600">{fouten["vervaldatum"]}</p>}
+          </div>
+
+          <div>
+            <Label ontbreekt={!factuur.valuta}>Valuta</Label>
+            <input
+              type="text"
+              value={factuur.valuta ?? ""}
+              onChange={(e) => zet("valuta", e.target.value.toUpperCase() || null)}
+              className={inputKlasse(fouten["valuta"])}
+              placeholder="EUR"
+              maxLength={3}
+            />
+            {fouten["valuta"] && <p className="mt-1 text-xs text-red-600">{fouten["valuta"]}</p>}
+          </div>
         </div>
 
         <div>
@@ -127,6 +160,45 @@ export default function FactuurFormulier({
             onChange={(v) => zet("totaal_incl", v)}
             fout={fouten["totaal_incl"]}
           />
+        </div>
+      </div>
+
+      <div className="mt-5">
+        <h3 className="mb-2 text-xs font-semibold text-slate-600">Leveranciersgegevens</h3>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div>
+            <Label ontbreekt={!factuur.iban}>IBAN</Label>
+            <input
+              type="text"
+              value={factuur.iban ?? ""}
+              onChange={(e) => zet("iban", e.target.value || null)}
+              className={inputKlasse(fouten["iban"])}
+              placeholder="—"
+            />
+            {fouten["iban"] && <p className="mt-1 text-xs text-red-600">{fouten["iban"]}</p>}
+          </div>
+
+          <div>
+            <Label ontbreekt={!factuur.btw_nummer}>BTW-nummer</Label>
+            <input
+              type="text"
+              value={factuur.btw_nummer ?? ""}
+              onChange={(e) => zet("btw_nummer", e.target.value || null)}
+              className={inputKlasse()}
+              placeholder="—"
+            />
+          </div>
+
+          <div>
+            <Label ontbreekt={!factuur.kvk_nummer}>KvK-nummer</Label>
+            <input
+              type="text"
+              value={factuur.kvk_nummer ?? ""}
+              onChange={(e) => zet("kvk_nummer", e.target.value || null)}
+              className={inputKlasse()}
+              placeholder="—"
+            />
+          </div>
         </div>
       </div>
 
@@ -181,21 +253,40 @@ export default function FactuurFormulier({
         </div>
       </div>
 
-      <div className="mt-6 flex justify-end gap-2 border-t border-slate-100 pt-4">
-        <button
-          type="button"
-          onClick={onAnnuleren}
-          className="rounded-md px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100"
-        >
-          Annuleren
-        </button>
-        <button
-          type="button"
-          onClick={onOpslaan}
-          className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
-        >
-          {bewerken ? "Wijzigingen opslaan" : "Toevoegen aan overzicht"}
-        </button>
+      <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+        <label className="flex items-center gap-2 text-xs font-medium text-slate-600">
+          Status
+          <select
+            value={status}
+            onChange={(e) => onStatusChange(e.target.value as FactuurStatus)}
+            className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-800/20"
+          >
+            {STATUSSEN.map((s) => (
+              <option key={s} value={s}>
+                {STATUS_LABELS[s]}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={onAnnuleren}
+            disabled={opslaan}
+            className="rounded-md px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-300"
+          >
+            Annuleren
+          </button>
+          <button
+            type="button"
+            onClick={onOpslaan}
+            disabled={opslaan}
+            className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+          >
+            {opslaan ? "Opslaan…" : bewerken ? "Wijzigingen opslaan" : "Toevoegen aan overzicht"}
+          </button>
+        </div>
       </div>
     </div>
   );

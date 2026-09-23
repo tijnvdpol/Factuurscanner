@@ -1,0 +1,188 @@
+import type { PostgrestError } from "@supabase/supabase-js";
+import type { Factuur, FactuurData, FactuurStatus } from "../types";
+import { supabase } from "./supabase";
+import { verwijderBestand } from "./opslag";
+
+export class DbError extends Error {
+  code: string | undefined;
+  constructor(melding: string, code?: string) {
+    super(melding);
+    this.code = code;
+  }
+}
+
+const SELECT = `
+  id, leverancier_naam, factuurnummer, factuurdatum, vervaldatum, valuta, bedrag_excl, totaal_incl,
+  status, bestand_pad, bestandsnaam, ai_model, created_at,
+  leverancier:leveranciers ( iban, btw_nummer, kvk_nummer ),
+  btw_regels ( volgorde, tarief, grondslag, btw_bedrag )
+`;
+
+interface FactuurRij {
+  id: string;
+  leverancier_naam: string | null;
+  factuurnummer: string | null;
+  factuurdatum: string | null;
+  vervaldatum: string | null;
+  valuta: string | null;
+  bedrag_excl: number | string | null;
+  totaal_incl: number | string | null;
+  status: FactuurStatus;
+  bestand_pad: string | null;
+  bestandsnaam: string | null;
+  ai_model: string | null;
+  created_at: string;
+  leverancier: { iban: string | null; btw_nummer: string | null; kvk_nummer: string | null } | null;
+  btw_regels: {
+    volgorde: number;
+    tarief: number | string | null;
+    grondslag: number | string | null;
+    btw_bedrag: number | string | null;
+  }[];
+}
+
+function getal(waarde: number | string | null): number | null {
+  return waarde === null ? null : Number(waarde);
+}
+
+function naarFactuur(rij: FactuurRij): Factuur {
+  return {
+    id: rij.id,
+    leverancier: rij.leverancier_naam,
+    factuurnummer: rij.factuurnummer,
+    factuurdatum: rij.factuurdatum,
+    vervaldatum: rij.vervaldatum,
+    bedrag_excl: getal(rij.bedrag_excl),
+    btw_regels: [...rij.btw_regels]
+      .sort((a, b) => a.volgorde - b.volgorde)
+      .map((r) => ({ tarief: getal(r.tarief), grondslag: getal(r.grondslag), btw_bedrag: getal(r.btw_bedrag) })),
+    totaal_incl: getal(rij.totaal_incl),
+    valuta: rij.valuta,
+    iban: rij.leverancier?.iban ?? null,
+    btw_nummer: rij.leverancier?.btw_nummer ?? null,
+    kvk_nummer: rij.leverancier?.kvk_nummer ?? null,
+    bestandsnaam: rij.bestandsnaam,
+    bestand_pad: rij.bestand_pad,
+    status: rij.status,
+    ai_model: rij.ai_model,
+    aangemaaktOp: rij.created_at,
+  };
+}
+
+/** Vertaalt een Supabase/Postgres-fout naar een begrijpelijke Nederlandse melding. */
+function vertaalFout(error: PostgrestError, data?: FactuurData): DbError {
+  switch (error.code) {
+    case "23505": {
+      const wie = [data?.leverancier, data?.factuurnummer && `factuurnummer ${data.factuurnummer}`]
+        .filter(Boolean)
+        .join(", ");
+      return new DbError(
+        `Deze factuur staat al in je overzicht${wie ? ` (${wie})` : ""}. Bewerk de bestaande factuur of controleer het factuurnummer.`,
+        error.code,
+      );
+    }
+    case "23514":
+      return new DbError(
+        error.message.includes("valuta")
+          ? "Valuta moet een code van 3 letters zijn (bijv. EUR)."
+          : "Een of meer velden bevatten een ongeldige waarde.",
+        error.code,
+      );
+    case "22007":
+    case "22008":
+      return new DbError("Een van de datums is ongeldig. Gebruik het formaat JJJJ-MM-DD.", error.code);
+    case "22003":
+      return new DbError("Een bedrag of tarief is te groot.", error.code);
+    case "42501":
+      return new DbError("Je hebt geen toegang tot deze factuur.", error.code);
+    case "PGRST301":
+    case "PGRST303":
+      return new DbError("Je sessie is verlopen. Log opnieuw in.", error.code);
+    default:
+      if (!error.code && /fetch/i.test(error.message)) {
+        return new DbError("Kon geen verbinding maken met de database. Controleer je internetverbinding.");
+      }
+      return new DbError(`Er ging iets mis bij de database: ${error.message}`, error.code);
+  }
+}
+
+export async function haalFacturenOp(): Promise<Factuur[]> {
+  const { data, error } = await supabase.from("facturen").select(SELECT).order("created_at");
+  if (error) throw vertaalFout(error);
+  return (data as unknown as FactuurRij[]).map(naarFactuur);
+}
+
+interface OpslaanInvoer {
+  id: string;
+  data: FactuurData;
+  status: FactuurStatus;
+  bestandPad: string | null;
+  bestandsnaam: string | null;
+  aiModel: string | null;
+  /** true = ingevulde leveranciersgegevens (IBAN e.d.) overschrijven; false = alleen lege aanvullen. */
+  leverancierBijwerken: boolean;
+}
+
+/** Slaat factuur + leverancier + btw-regels in één transactie op (RPC sla_factuur_op). */
+export async function slaFactuurOp(invoer: OpslaanInvoer): Promise<string> {
+  const { data, error } = await supabase.rpc("sla_factuur_op", {
+    p_factuur: {
+      ...invoer.data,
+      id: invoer.id,
+      status: invoer.status,
+      bestand_pad: invoer.bestandPad,
+      bestandsnaam: invoer.bestandsnaam,
+      ai_model: invoer.aiModel,
+    },
+    p_leverancier_bijwerken: invoer.leverancierBijwerken,
+  });
+  if (error) throw vertaalFout(error, invoer.data);
+  return data as string;
+}
+
+/** Verwijdert de factuur (btw-regels gaan mee via cascade) en daarna het originele bestand. */
+export async function verwijderFactuur(factuur: Factuur): Promise<void> {
+  const { data, error } = await supabase.from("facturen").delete().eq("id", factuur.id).select("id");
+  if (error) throw vertaalFout(error);
+  if (!data || data.length === 0) throw new DbError("Factuur niet gevonden. Ververs de pagina.");
+
+  if (factuur.bestand_pad) {
+    // De factuur is al weg; een achtergebleven bestand is niet erg genoeg om een fout te tonen.
+    await verwijderBestand(factuur.bestand_pad).catch((err) => console.warn(err));
+  }
+}
+
+export interface ImportResultaat {
+  geimporteerd: number;
+  duplicaten: number;
+  mislukt: Factuur[];
+}
+
+/** Eenmalige import van facturen uit localStorage (van vóór de Supabase-koppeling). */
+export async function importeerLokaleFacturen(facturen: Factuur[], userId: string): Promise<ImportResultaat> {
+  const resultaat: ImportResultaat = { geimporteerd: 0, duplicaten: 0, mislukt: [] };
+
+  for (const factuur of facturen) {
+    // Een bestand uit de tussenfase (Storage, maar lijst nog lokaal) alleen meenemen als het van deze gebruiker is;
+    // het id moet dan gelijk blijven omdat het in het bestandspad zit.
+    const eigenBestand = factuur.bestand_pad?.startsWith(`${userId}/${factuur.id}/`) ?? false;
+    const { id: _id, bestandsnaam, bestand_pad: _pad, status: _s, ai_model, aangemaaktOp: _a, ...data } = factuur;
+
+    try {
+      await slaFactuurOp({
+        id: eigenBestand ? factuur.id : crypto.randomUUID(),
+        data,
+        status: "gecontroleerd",
+        bestandPad: eigenBestand ? factuur.bestand_pad : null,
+        bestandsnaam,
+        aiModel: ai_model,
+        leverancierBijwerken: false,
+      });
+      resultaat.geimporteerd++;
+    } catch (err) {
+      if (err instanceof DbError && err.code === "23505") resultaat.duplicaten++;
+      else resultaat.mislukt.push(factuur);
+    }
+  }
+  return resultaat;
+}

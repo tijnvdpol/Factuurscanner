@@ -1,4 +1,4 @@
-import type { Factuur } from "../types";
+import { STATUS_LABELS, type Factuur } from "../types";
 import { heeftFouten, valideerFactuur } from "./validatie";
 
 const TARIEVEN = [0, 9, 21] as const;
@@ -31,6 +31,12 @@ export function genereerCsv(facturen: Factuur[]): string {
     "Totaal incl. BTW",
     "Valuta",
     "Status",
+    // Nieuwe kolommen achteraan, zodat bestaande imports op kolomvolgorde blijven werken
+    "Verwerkingsstatus",
+    "Vervaldatum",
+    "IBAN leverancier",
+    "BTW-nummer leverancier",
+    "KvK-nummer leverancier",
   ];
 
   const regels = facturen.map((f) => {
@@ -49,6 +55,11 @@ export function genereerCsv(facturen: Factuur[]): string {
       csvGetal(f.totaal_incl),
       csvVeld(f.valuta),
       status,
+      STATUS_LABELS[f.status],
+      csvVeld(f.vervaldatum),
+      csvVeld(f.iban),
+      csvVeld(f.btw_nummer),
+      csvVeld(f.kvk_nummer),
     ];
     return rij.join(";");
   });

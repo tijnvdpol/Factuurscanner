@@ -1,44 +1,56 @@
 import { useState } from "react";
+import { MODEL_PATROON, STANDAARD_MODEL } from "../lib/gemini";
 
 interface Props {
-  apiKey: string;
   model: string;
-  onOpslaan: (apiKey: string, model: string) => void;
+  onOpslaan: (model: string) => Promise<void>;
   onSluiten: () => void;
 }
 
-export default function InstellingenModal({ apiKey, model, onOpslaan, onSluiten }: Props) {
-  const [lokaleKey, setLokaleKey] = useState(apiKey);
+export default function InstellingenModal({ model, onOpslaan, onSluiten }: Props) {
   const [lokaalModel, setLokaalModel] = useState(model);
+  const [bezig, setBezig] = useState(false);
+  const [fout, setFout] = useState<string | null>(null);
+
+  const opslaan = async () => {
+    const nieuwModel = lokaalModel.trim() || STANDAARD_MODEL;
+    if (!MODEL_PATROON.test(nieuwModel)) {
+      setFout("Ongeldige modelnaam. Gebruik bijvoorbeeld gemini-3.6-flash.");
+      return;
+    }
+    setFout(null);
+    setBezig(true);
+    try {
+      await onOpslaan(nieuwModel);
+    } catch (err) {
+      setFout(err instanceof Error ? err.message : "Opslaan is mislukt.");
+      setBezig(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
       <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
         <h2 className="mb-1 text-sm font-semibold text-slate-800">Instellingen</h2>
         <p className="mb-4 text-xs text-slate-500">
-          Voor het scannen van facturen is een Gemini API-sleutel nodig. Deze wordt alleen lokaal in je
-          browser opgeslagen.
+          Facturen worden server-side gescand met Google Gemini. Je hoeft zelf geen API-sleutel in te voeren. Het
+          gekozen model wordt bij je account bewaard.
         </p>
-
-        <label className="mb-1 block text-xs font-medium text-slate-600">Gemini API-sleutel</label>
-        <input
-          type="password"
-          value={lokaleKey}
-          onChange={(e) => setLokaleKey(e.target.value)}
-          placeholder="AIza…"
-          className="mb-4 w-full rounded-md border border-slate-300 px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-800/20"
-        />
 
         <label className="mb-1 block text-xs font-medium text-slate-600">Model</label>
         <input
           type="text"
           value={lokaalModel}
           onChange={(e) => setLokaalModel(e.target.value)}
-          placeholder="gemini-3.6-flash"
-          className="mb-6 w-full rounded-md border border-slate-300 px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-800/20"
+          placeholder={STANDAARD_MODEL}
+          className="mb-4 w-full rounded-md border border-slate-300 px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-800/20"
         />
 
-        <div className="flex justify-end gap-2">
+        {fout && (
+          <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{fout}</div>
+        )}
+
+        <div className="mt-2 flex justify-end gap-2">
           <button
             type="button"
             onClick={onSluiten}
@@ -48,10 +60,11 @@ export default function InstellingenModal({ apiKey, model, onOpslaan, onSluiten 
           </button>
           <button
             type="button"
-            onClick={() => onOpslaan(lokaleKey.trim(), lokaalModel.trim() || "gemini-2.5-flash")}
-            className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+            onClick={opslaan}
+            disabled={bezig}
+            className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
-            Opslaan
+            {bezig ? "Opslaan…" : "Opslaan"}
           </button>
         </div>
       </div>
