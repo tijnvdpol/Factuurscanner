@@ -1,5 +1,5 @@
 import type { PostgrestError } from "@supabase/supabase-js";
-import type { Factuur, FactuurData, FactuurStatus } from "../types";
+import { alleenFactuurData, type Factuur, type FactuurData, type FactuurStatus, type Signaal } from "../types";
 import { supabase } from "./supabase";
 import { verwijderBestand } from "./opslag";
 
@@ -13,9 +13,12 @@ export class DbError extends Error {
 
 const SELECT = `
   id, leverancier_naam, factuurnummer, factuurdatum, vervaldatum, valuta, bedrag_excl, totaal_incl,
-  status, bestand_pad, bestandsnaam, ai_model, created_at,
-  leverancier:leveranciers ( iban, btw_nummer, kvk_nummer ),
-  btw_regels ( volgorde, tarief, grondslag, btw_bedrag )
+  status, bestand_pad, bestandsnaam, ai_model, created_at, iban, btw_nummer, kvk_nummer,
+  leverancier:leveranciers ( iban ),
+  btw_regels ( volgorde, tarief, grondslag, btw_bedrag ),
+  signalen:factuur_signalen (
+    id, factuur_id, type, ernst, bericht, details, opgelost, opgelost_door, opgelost_op, toelichting, created_at
+  )
 `;
 
 interface FactuurRij {
@@ -32,13 +35,17 @@ interface FactuurRij {
   bestandsnaam: string | null;
   ai_model: string | null;
   created_at: string;
-  leverancier: { iban: string | null; btw_nummer: string | null; kvk_nummer: string | null } | null;
+  iban: string | null;
+  btw_nummer: string | null;
+  kvk_nummer: string | null;
+  leverancier: { iban: string | null } | null;
   btw_regels: {
     volgorde: number;
     tarief: number | string | null;
     grondslag: number | string | null;
     btw_bedrag: number | string | null;
   }[];
+  signalen: Signaal[];
 }
 
 function getal(waarde: number | string | null): number | null {
@@ -58,9 +65,11 @@ function naarFactuur(rij: FactuurRij): Factuur {
       .map((r) => ({ tarief: getal(r.tarief), grondslag: getal(r.grondslag), btw_bedrag: getal(r.btw_bedrag) })),
     totaal_incl: getal(rij.totaal_incl),
     valuta: rij.valuta,
-    iban: rij.leverancier?.iban ?? null,
-    btw_nummer: rij.leverancier?.btw_nummer ?? null,
-    kvk_nummer: rij.leverancier?.kvk_nummer ?? null,
+    iban: rij.iban,
+    btw_nummer: rij.btw_nummer,
+    kvk_nummer: rij.kvk_nummer,
+    leverancier_iban: rij.leverancier?.iban ?? null,
+    signalen: [...rij.signalen].sort((a, b) => a.created_at.localeCompare(b.created_at)),
     bestandsnaam: rij.bestandsnaam,
     bestand_pad: rij.bestand_pad,
     status: rij.status,
@@ -93,6 +102,10 @@ function vertaalFout(error: PostgrestError, data?: FactuurData): DbError {
       return new DbError("Een van de datums is ongeldig. Gebruik het formaat JJJJ-MM-DD.", error.code);
     case "22003":
       return new DbError("Een bedrag of tarief is te groot.", error.code);
+    case "22023":
+    case "P0002":
+      // Eigen meldingen uit de databasefuncties (bijv. "Een toelichting is verplicht ...")
+      return new DbError(error.message, error.code);
     case "42501":
       return new DbError("Je hebt geen toegang tot deze factuur.", error.code);
     case "PGRST301":
@@ -166,7 +179,8 @@ export async function importeerLokaleFacturen(facturen: Factuur[], userId: strin
     // Een bestand uit de tussenfase (Storage, maar lijst nog lokaal) alleen meenemen als het van deze gebruiker is;
     // het id moet dan gelijk blijven omdat het in het bestandspad zit.
     const eigenBestand = factuur.bestand_pad?.startsWith(`${userId}/${factuur.id}/`) ?? false;
-    const { id: _id, bestandsnaam, bestand_pad: _pad, status: _s, ai_model, aangemaaktOp: _a, ...data } = factuur;
+    const { bestandsnaam, ai_model } = factuur;
+    const data = alleenFactuurData(factuur);
 
     try {
       await slaFactuurOp({
@@ -185,4 +199,14 @@ export async function importeerLokaleFacturen(facturen: Factuur[], userId: strin
     }
   }
   return resultaat;
+}
+
+/** Lost een signaal op (toelichting verplicht); bij een afwijkend IBAN kan het nieuwe IBAN worden overgenomen. */
+export async function losSignaalOp(signaalId: string, toelichting: string, ibanOvernemen = false): Promise<void> {
+  const { error } = await supabase.rpc("los_signaal_op", {
+    p_signaal_id: signaalId,
+    p_toelichting: toelichting,
+    p_iban_overnemen: ibanOvernemen,
+  });
+  if (error) throw vertaalFout(error);
 }

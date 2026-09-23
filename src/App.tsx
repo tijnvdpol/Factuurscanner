@@ -3,6 +3,8 @@ import type { Session } from "@supabase/supabase-js";
 import UploadZone from "./components/UploadZone";
 import FactuurFormulier from "./components/FactuurFormulier";
 import FacturenTabel from "./components/FacturenTabel";
+import SignalenBlok from "./components/SignalenBlok";
+import { voorspelSignalen } from "./lib/signalen";
 import { GeminiError, scanFactuur } from "./lib/gemini";
 import { valideerFactuur } from "./lib/validatie";
 import { supabase } from "./lib/supabase";
@@ -11,11 +13,12 @@ import {
   DbError,
   haalFacturenOp,
   importeerLokaleFacturen,
+  losSignaalOp,
   slaFactuurOp,
   verwijderFactuur,
 } from "./lib/facturenApi";
 import { downloadCsv } from "./lib/csv";
-import { legeFactuurData, type Factuur, type FactuurData, type FactuurStatus } from "./types";
+import { alleenFactuurData, legeFactuurData, type Factuur, type FactuurData, type FactuurStatus } from "./types";
 
 // Facturen van vóór de Supabase-koppeling; alleen nog gelezen voor de eenmalige import.
 const LOKALE_FACTUREN = "factuurscanner_facturen";
@@ -30,6 +33,8 @@ function laadLokaleFacturen(): Factuur[] {
       ...legeFactuurData(),
       ...f,
       bestand_pad: f.bestand_pad ?? null,
+      leverancier_iban: null,
+      signalen: [],
       status: "gecontroleerd",
       ai_model: null,
     }));
@@ -106,6 +111,28 @@ export default function App({ sessie }: Props) {
 
   const conceptFouten = useMemo(() => (concept ? valideerFactuur(concept.data) : {}), [concept]);
 
+  const conceptFactuur = concept?.bewerkId ? facturen.find((f) => f.id === concept.bewerkId) : undefined;
+
+  const voorspeldeSignalen = useMemo(() => {
+    if (!concept) return [];
+    const naam = concept.data.leverancier?.trim().toLowerCase();
+    const zelfdeLeverancier = (f: Factuur) => !!naam && f.leverancier?.trim().toLowerCase() === naam;
+    // Het bekende IBAN: van de factuur zelf als de leverancier niet veranderd is, anders van een andere factuur.
+    const bekendIban =
+      (conceptFactuur && zelfdeLeverancier(conceptFactuur) ? conceptFactuur.leverancier_iban : null) ??
+      facturen.find((f) => f.id !== concept.factuurId && zelfdeLeverancier(f))?.leverancier_iban ??
+      null;
+    return voorspelSignalen(
+      { ...concept.data, id: concept.factuurId },
+      { anderen: facturen.filter((f) => f.id !== concept.factuurId), bekendIban, limieten: [] },
+    );
+  }, [concept, conceptFactuur, facturen]);
+
+  const losSignaalOpEnVernieuw = async (signaalId: string, toelichting: string, ibanOvernemen: boolean) => {
+    await losSignaalOp(signaalId, toelichting, ibanOvernemen);
+    await vernieuw();
+  };
+
   const verwerkBestand = async (bestand: File) => {
     setFoutmelding(null);
     setMelding(null);
@@ -137,7 +164,8 @@ export default function App({ sessie }: Props) {
   const bewerkRij = (id: string) => {
     const factuur = facturen.find((f) => f.id === id);
     if (!factuur) return;
-    const { id: _id, bestandsnaam, bestand_pad, status, ai_model, aangemaaktOp: _a, ...data } = factuur;
+    const { bestandsnaam, bestand_pad, status, ai_model } = factuur;
+    const data = alleenFactuurData(factuur);
     ruimConceptBestandOp(concept);
     setFoutmelding(null);
     setConcept({
@@ -295,7 +323,14 @@ export default function App({ sessie }: Props) {
             onOpslaan={slaConceptOp}
             onAnnuleren={annuleerConcept}
             opslaan={opslaan}
-          />
+          >
+            <SignalenBlok
+              signalen={conceptFactuur?.signalen ?? []}
+              voorspeld={voorspeldeSignalen}
+              leverancier={concept.data.leverancier}
+              onOplossen={losSignaalOpEnVernieuw}
+            />
+          </FactuurFormulier>
         )}
 
         {lokaleFacturen.length > 0 && (

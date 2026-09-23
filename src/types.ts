@@ -28,8 +28,36 @@ export const STATUS_LABELS: Record<FactuurStatus, string> = {
   betaald: "Betaald",
 };
 
+export const SIGNAAL_TYPES = [
+  "mogelijk_duplicaat",
+  "iban_afwijkend",
+  "nieuwe_leverancier",
+  "rond_bedrag",
+  "net_onder_limiet",
+  "validatiefout",
+] as const;
+export type SignaalType = (typeof SIGNAAL_TYPES)[number];
+export type SignaalErnst = "info" | "waarschuwing" | "kritiek";
+
+export interface Signaal {
+  id: string;
+  factuur_id: string;
+  type: SignaalType;
+  ernst: SignaalErnst;
+  bericht: string;
+  details: Record<string, unknown>;
+  opgelost: boolean;
+  opgelost_door: string | null;
+  opgelost_op: string | null;
+  toelichting: string | null;
+  created_at: string;
+}
+
 export interface Factuur extends FactuurData {
   id: string;
+  /** Het bekende IBAN van de gekoppelde leverancier (kan afwijken van het IBAN op de factuur). */
+  leverancier_iban: string | null;
+  signalen: Signaal[];
   bestandsnaam: string | null;
   /** Pad van het originele bestand in Storage; null voor facturen zonder bestand. */
   bestand_pad: string | null;
@@ -53,5 +81,22 @@ export function legeFactuurData(): FactuurData {
     iban: null,
     btw_nummer: null,
     kvk_nummer: null,
+  };
+}
+
+/** Alleen de bewerkbare factuurvelden (zonder id, status, signalen e.d.). */
+export function alleenFactuurData(f: FactuurData): FactuurData {
+  return {
+    leverancier: f.leverancier,
+    factuurnummer: f.factuurnummer,
+    factuurdatum: f.factuurdatum,
+    vervaldatum: f.vervaldatum,
+    bedrag_excl: f.bedrag_excl,
+    btw_regels: f.btw_regels,
+    totaal_incl: f.totaal_incl,
+    valuta: f.valuta,
+    iban: f.iban,
+    btw_nummer: f.btw_nummer,
+    kvk_nummer: f.kvk_nummer,
   };
 }

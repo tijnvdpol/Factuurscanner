@@ -15,6 +15,8 @@ interface Props {
   onBekijkOrigineel?: () => void;
   bewerken: boolean;
   opslaan: boolean;
+  /** Extra blokken onder de btw-regels (signalen e.d.). */
+  children?: React.ReactNode;
 }
 
 function Label({ children, ontbreekt }: { children: React.ReactNode; ontbreekt?: boolean }) {
@@ -43,6 +45,7 @@ export default function FactuurFormulier({
   onBekijkOrigineel,
   bewerken,
   opslaan,
+  children,
 }: Props) {
   const zet = <K extends keyof FactuurData>(veld: K, waarde: FactuurData[K]) =>
     onChange({ ...factuur, [veld]: waarde });
@@ -260,6 +263,8 @@ export default function FactuurFormulier({
           ))}
         </div>
       </div>
+
+      {children}
 
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
         <label className="flex items-center gap-2 text-xs font-medium text-slate-600">

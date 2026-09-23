@@ -32,3 +32,48 @@ Per keuze: **wat** er gekozen is, **waarom**, en welk **alternatief** is afgewog
 
 ### B7. Strengere datumcontrole
 - **Wat:** `isGeldigeDatum` weigert niet-bestaande datums zoals 2026-02-30. Voorheen accepteerde `Date.parse` die en schoof ze stilletjes door naar een andere dag.
+
+## Fase 2.2: signalen
+
+### B8. Signalen bepalen in een Postgres-functie, niet in een Edge Function
+- **Wat:** `intern.bepaal_signalen(factuur_id)` wordt aan het eind van `sla_factuur_op` aangeroepen, in dezelfde transactie.
+- **Waarom:** opslaan loopt al via deze RPC, dus een factuur kan niet zonder signaalbepaling worden opgeslagen. Er is geen extra netwerkstap en geen extra deploy nodig. De functie leest de actuele data direct, dus er is geen race tussen twee gelijktijdige saves via een losse functie. Blokkades (kritiek signaal → niet goedkeuren) moeten toch al in de database zitten.
+- **Alternatief:** een Edge Function na het opslaan. Die kan worden overgeslagen, wordt niet atomisch uitgevoerd en vraagt om een service-role-sleutel.
+
+### B9. De regels staan dubbel: SQL is leidend, TypeScript geeft een voorproef
+- **Wat:** `src/lib/signalen.ts` bevat dezelfde regels als pure functies. Het formulier toont daarmee "Bij opslaan verwacht: …" vóór het opslaan. De databasetests vergelijken de SQL- en TS-uitkomst van IBAN-, btw-, KvK- en factuurnummercontroles op dezelfde invoer.
+- **Waarom:** de opdracht vraagt om pure, unit-testbare functies, en de gebruiker ziet een duplicaat of afwijkend IBAN al vóór het opslaan.
+
+### B10. Het IBAN staat op de factuur én bij de leverancier
+- **Wat:** nieuwe kolommen `facturen.iban`, `btw_nummer` en `kvk_nummer` (backfill vanuit de leverancier). `leveranciers.iban` is het "bekende" IBAN. `sla_factuur_op` vult dat alleen als het leeg is (eerste factuur) en overschrijft het nooit, ook niet bij bewerken. Wijzigen kan alleen via `los_signaal_op(..., p_iban_overnemen => true)`.
+- **Waarom:** zonder IBAN per factuur is een afwijking niet vast te stellen. Automatisch overschrijven is precies de fraudeaanval (CEO-fraude/"nieuw rekeningnummer") die we willen tegenhouden.
+- **Gevolg:** test 7b in `handtests/fase1_rls.sql` is aangepast, want bewerken overschrijft het IBAN niet meer.
+
+### B11. Levenscyclus van signalen: sleutel per situatie
+- **Wat:** extra kolommen `sleutel` en `details` (uniek op factuur + type + sleutel). Bij elke save worden de signalen opnieuw berekend:
+  - nieuwe signalen worden toegevoegd
+  - open signalen die niet meer gelden verdwijnen
+  - opgeloste signalen blijven staan met hun toelichting
+  - verandert de situatie (bijv. een ander afwijkend IBAN, sleutel = factuur-IBAN|bekend IBAN), dan ontstaat een nieuw signaal
+- **Waarom:** een opgelost signaal mag niet bij elke save terugkomen, maar een nieuwe afwijking moet wel opnieuw gemeld worden.
+
+### B12. Signalen zijn alleen via functies te schrijven
+- **Wat:** `authenticated` heeft alleen SELECT op `factuur_signalen`. Aanmaken gebeurt via `intern.bepaal_signalen`, oplossen via `public.los_signaal_op` (security definer, toelichting verplicht, ook als CHECK-constraint).
+- **Waarom:** anders kan iemand een kritiek signaal verwijderen en zo de goedkeuringsblokkade uit fase 3.2 omzeilen.
+- **Schema `intern`:** hulpfuncties staan in een apart schema dat PostgREST niet publiceert. Ze zijn dus niet via de API aan te roepen.
+
+### B13. Normalisatie van factuurnummers
+- **Wat:** hoofdletters, spaties weg, voorloopnullen weg **per cijferreeks**, streepjes weg. `F-001`, `f 1` en `F1` worden allemaal `F1`, en `2024-0012` ≡ `2024-12`.
+- **Waarom:** "voorloopnullen" alleen aan het begin van de hele string vangt `F-001` vs `F-1` niet.
+- **Alternatief:** alleen voorloopnullen aan het begin. Dat was te beperkt.
+- **Uniciteit:** de bestaande unieke index (exact zelfde nummer bij zelfde leverancier) blijft bestaan als harde blokkade. Het signaal vangt de varianten.
+
+### B14. Duplicaat-op-bedrag gebruikt de factuurdatum, met de aanmaakdatum als terugval
+- **Wat:** "binnen 30 dagen" wordt gemeten op `factuurdatum`. Ontbreekt die, dan telt `created_at`.
+
+### B15. Validatiefouten als signaal
+- **Wat:** type `validatiefout` (waarschuwing), één per veld: IBAN, btw-nummer, KvK-nummer, vervaldatum vóór factuurdatum, en de totaalcontrole (grondslag + btw ≠ totaal).
+- **Waarom:** zo zijn validatiefouten ook zichtbaar voor een goedkeurder die het formulier niet opent. Ze blokkeren goedkeuring niet; alleen "kritiek" blokkeert.
+
+### B16. Backfill van signalen
+- **Wat:** de migratie berekent signalen voor alle bestaande facturen (oudste eerst). Zonder ingelogde gebruiker (migratie/service role) slaat `bepaal_signalen` de toegangscontrole over.

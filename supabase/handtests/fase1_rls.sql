@@ -68,13 +68,14 @@ begin
   end;
   if not v_ok then raise exception 'FOUT 6: duplicaat zonder leverancier werd niet geweigerd'; end if;
 
-  -- 7. Nieuwe scan overschrijft bestaand IBAN niet; expliciete bewerking wel
+  -- 7. Nieuwe scan overschrijft bestaand IBAN niet. Sinds stap 2 ook een bewerking niet: het IBAN
+  --    wordt op de factuur bewaard en een afwijking wordt een signaal (zie fase2_3_workflow.sql).
   perform public.sla_factuur_op(jsonb_build_object('leverancier', 'bol.com', 'factuurnummer', 'F-002', 'iban', 'NL02RABO0123456789'));
   select iban into v_tekst from public.leveranciers where id = v_lev_a;
   if v_tekst <> 'NL91ABNA0417164300' then raise exception 'FOUT 7a: IBAN onterecht overschreven'; end if;
   perform public.sla_factuur_op(jsonb_build_object('id', v_f1, 'leverancier', 'Bol.com', 'factuurnummer', 'F-001', 'iban', 'NL02RABO0123456789'), true);
   select iban into v_tekst from public.leveranciers where id = v_lev_a;
-  if v_tekst <> 'NL02RABO0123456789' then raise exception 'FOUT 7b: IBAN niet bijgewerkt bij bewerken'; end if;
+  if v_tekst <> 'NL91ABNA0417164300' then raise exception 'FOUT 7b: IBAN onterecht overschreven bij bewerken'; end if;
 
   -- 8. Bewerken vervangt btw-regels en behoudt status
   update public.facturen set status = 'goedgekeurd' where id = v_f1;
