@@ -3,8 +3,7 @@ import type { Session } from "@supabase/supabase-js";
 import UploadZone from "./components/UploadZone";
 import FactuurFormulier from "./components/FactuurFormulier";
 import FacturenTabel from "./components/FacturenTabel";
-import InstellingenModal from "./components/InstellingenModal";
-import { GeminiError, STANDAARD_MODEL, scanFactuur } from "./lib/gemini";
+import { GeminiError, scanFactuur } from "./lib/gemini";
 import { valideerFactuur } from "./lib/validatie";
 import { supabase } from "./lib/supabase";
 import { OpslagError, openOrigineel, uploadFactuurBestand, verwijderBestand } from "./lib/opslag";
@@ -37,11 +36,6 @@ function laadLokaleFacturen(): Factuur[] {
   } catch {
     return [];
   }
-}
-
-function modelVan(sessie: Session): string {
-  const model = sessie.user.user_metadata?.gemini_model;
-  return typeof model === "string" && model ? model : STANDAARD_MODEL;
 }
 
 function foutTekst(err: unknown, standaard: string): string {
@@ -78,8 +72,6 @@ export default function App({ sessie }: Props) {
   const [lokaleFacturen, setLokaleFacturen] = useState<Factuur[]>(laadLokaleFacturen);
   const [importeren, setImporteren] = useState(false);
   const [exporteren, setExporteren] = useState(false);
-  const [model, setModel] = useState(() => modelVan(sessie));
-  const [toonInstellingen, setToonInstellingen] = useState(false);
   const [bezig, setBezig] = useState(false);
   const [opslaan, setOpslaan] = useState(false);
   const [foutmelding, setFoutmelding] = useState<string | null>(null);
@@ -122,7 +114,7 @@ export default function App({ sessie }: Props) {
     let pad: string | null = null;
     try {
       pad = await uploadFactuurBestand(sessie.user.id, factuurId, bestand);
-      const { factuur: data, model: aiModel } = await scanFactuur(pad, model);
+      const { factuur: data, model: aiModel } = await scanFactuur(pad);
       ruimConceptBestandOp(concept);
       setConcept({
         factuurId,
@@ -145,7 +137,7 @@ export default function App({ sessie }: Props) {
   const bewerkRij = (id: string) => {
     const factuur = facturen.find((f) => f.id === id);
     if (!factuur) return;
-    const { id: _id, bestandsnaam, bestand_pad, status, ai_model: _m, aangemaaktOp: _a, ...data } = factuur;
+    const { id: _id, bestandsnaam, bestand_pad, status, ai_model, aangemaaktOp: _a, ...data } = factuur;
     ruimConceptBestandOp(concept);
     setFoutmelding(null);
     setConcept({
@@ -153,7 +145,7 @@ export default function App({ sessie }: Props) {
       bewerkId: id,
       bestandsnaam,
       bestandPad: bestand_pad,
-      aiModel: null,
+      aiModel: ai_model,
       status,
       origineleLeverancier: data.leverancier,
       data,
@@ -264,13 +256,6 @@ export default function App({ sessie }: Props) {
             <span className="hidden truncate text-xs text-slate-400 sm:inline">{sessie.user.email}</span>
             <button
               type="button"
-              onClick={() => setToonInstellingen(true)}
-              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
-            >
-              Instellingen
-            </button>
-            <button
-              type="button"
               onClick={() => supabase.auth.signOut()}
               className="rounded-md px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100"
             >
@@ -302,6 +287,7 @@ export default function App({ sessie }: Props) {
             fouten={conceptFouten}
             bewerken={concept.bewerkId !== null}
             bestandsnaam={concept.bestandsnaam ?? undefined}
+            aiModel={concept.aiModel ?? undefined}
             onBekijkOrigineel={concept.bestandPad ? () => bekijkOrigineel(concept.bestandPad!) : undefined}
             onChange={(data) => setConcept((huidig) => (huidig ? { ...huidig, data } : huidig))}
             status={concept.status}
@@ -355,19 +341,6 @@ export default function App({ sessie }: Props) {
           onExporteren={exporteerCsv}
         />
       </main>
-
-      {toonInstellingen && (
-        <InstellingenModal
-          model={model}
-          onSluiten={() => setToonInstellingen(false)}
-          onOpslaan={async (nieuwModel) => {
-            const { error } = await supabase.auth.updateUser({ data: { gemini_model: nieuwModel } });
-            if (error) throw new Error(`Model opslaan is mislukt: ${error.message}`);
-            setModel(nieuwModel);
-            setToonInstellingen(false);
-          }}
-        />
-      )}
     </div>
   );
 }

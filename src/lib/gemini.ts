@@ -2,11 +2,8 @@ import { FunctionsFetchError, FunctionsHttpError } from "@supabase/supabase-js";
 import type { FactuurData } from "../types";
 import { supabase } from "./supabase";
 
-// De Gemini-aanroep (prompt, schema en API-sleutel) draait server-side in de Edge Function
-// supabase/functions/scan-factuur. Hier alleen de aanroep vanuit de frontend.
-
-export const STANDAARD_MODEL = "gemini-3.6-flash";
-export const MODEL_PATROON = /^gemini-[a-z0-9][a-z0-9.-]*$/;
+// De Gemini-aanroep (prompt, schema, API-sleutel en modelkeuze met automatische fallback) draait
+// server-side in de Edge Function supabase/functions/scan-factuur. Hier alleen de aanroep vanuit de frontend.
 
 export class GeminiError extends Error {}
 
@@ -34,10 +31,10 @@ async function foutmeldingUit(error: unknown): Promise<string> {
   return "Onbekende fout tijdens het scannen.";
 }
 
-/** Laat de Edge Function het (al geüploade) bestand scannen en geeft de herkende velden terug. */
-export async function scanFactuur(bestandPad: string, model: string): Promise<ScanAntwoord> {
+/** Laat de Edge Function het (al geüploade) bestand scannen en geeft de herkende velden + gebruikte model terug. */
+export async function scanFactuur(bestandPad: string): Promise<ScanAntwoord> {
   const { data, error } = await supabase.functions.invoke<ScanAntwoord>("scan-factuur", {
-    body: { bestand_pad: bestandPad, model },
+    body: { bestand_pad: bestandPad },
   });
   if (error || !data) {
     throw new GeminiError(await foutmeldingUit(error));

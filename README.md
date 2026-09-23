@@ -15,7 +15,7 @@ Scan facturen (PDF/foto), laat Google Gemini de velden herkennen, controleer ze 
 | `src/lib/opslag.ts` | Storage (upload, signed URL, verwijderen) |
 | `src/lib/gemini.ts` | Aanroep van de Edge Function |
 | `supabase/migrations/` | SQL-migraties (tabellen, RLS, RPC `sla_factuur_op`, Storage-bucket en -policies) |
-| `supabase/functions/scan-factuur/` | Edge Function (Deno) die Gemini aanroept |
+| `supabase/functions/scan-factuur/` | Edge Function (Deno) die Gemini aanroept, met automatische fallback naar een ander model |
 | `supabase/functions/_shared/gemini.ts` | Prompt, responsschema en normalisatie |
 | `supabase/handtests/fase1_rls.sql` | Testscript voor RLS en duplicaatcontrole (SQL Editor) |
 
@@ -40,6 +40,8 @@ npm.cmd run dev          # http://localhost:5173
    - Redirect URLs: `http://localhost:5173` en de Vercel-URL
    - "Confirm email" aan laten
 6. **Secret zetten**: onder *Edge Functions → Secrets* een secret `GEMINI_API_KEY` aanmaken.
+   - Het model wordt automatisch gekozen. De functie probeert `gemini-3.6-flash`, dan `gemini-2.5-flash` en dan `gemini-2.5-flash-lite`, en schakelt naar het volgende model als een model niet bestaat, de limiet bereikt heeft, overbelast is of niet op tijd reageert.
+   - Optioneel stel je een andere volgorde in met het secret `GEMINI_MODELLEN`, bijvoorbeeld `gemini-3.6-flash,gemini-2.5-flash`.
 7. **Edge Function deployen** (vanuit deze map, commando's één voor één):
    ```powershell
    npx.cmd supabase login

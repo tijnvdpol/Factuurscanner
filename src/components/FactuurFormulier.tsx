@@ -10,6 +10,8 @@ interface Props {
   onOpslaan: () => void;
   onAnnuleren: () => void;
   bestandsnaam?: string;
+  /** Het Gemini-model dat de factuur heeft herkend (automatisch gekozen door de server). */
+  aiModel?: string;
   onBekijkOrigineel?: () => void;
   bewerken: boolean;
   opslaan: boolean;
@@ -37,6 +39,7 @@ export default function FactuurFormulier({
   onOpslaan,
   onAnnuleren,
   bestandsnaam,
+  aiModel,
   onBekijkOrigineel,
   bewerken,
   opslaan,
@@ -68,9 +71,12 @@ export default function FactuurFormulier({
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
       <div className="mb-4 flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold text-slate-800">
-          {bewerken ? "Factuur bewerken" : "Controleer gescande gegevens"}
-        </h2>
+        <div>
+          <h2 className="text-sm font-semibold text-slate-800">
+            {bewerken ? "Factuur bewerken" : "Controleer gescande gegevens"}
+          </h2>
+          {aiModel && <p className="text-xs text-slate-400">Herkend door {aiModel}</p>}
+        </div>
         <div className="flex min-w-0 items-center gap-2">
           {bestandsnaam && <span className="truncate text-xs text-slate-400">{bestandsnaam}</span>}
           {onBekijkOrigineel && (

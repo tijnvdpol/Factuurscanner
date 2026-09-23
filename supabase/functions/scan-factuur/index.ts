@@ -1,20 +1,28 @@
 // Edge Function scan-factuur: leest een factuurbestand uit Storage en laat Gemini de velden herkennen.
 //
-// POST { bestand_pad: string, model?: string }
-//   200 { factuur: FactuurData, model: string }
+// POST { bestand_pad: string }
+//   200 { factuur: FactuurData, model: string }   (model = het model dat de scan heeft gedaan)
 //   4xx/5xx { error: string }  (Nederlandse foutmelding voor de gebruiker)
 //
-// Secrets: GEMINI_API_KEY (zelf instellen). SUPABASE_URL en SUPABASE_ANON_KEY zet Supabase automatisch.
+// Het model wordt automatisch gekozen: de modellen worden op volgorde geprobeerd en bij een model dat
+// niet bereikbaar is (bestaat niet, limiet bereikt, overbelast, time-out) wordt naar het volgende geschakeld.
+//
+// Secrets: GEMINI_API_KEY (zelf instellen), optioneel GEMINI_MODELLEN (kommagescheiden volgorde).
+// SUPABASE_URL en SUPABASE_ANON_KEY zet Supabase automatisch.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { encodeBase64 } from "jsr:@std/encoding@1/base64";
-import { normaliseerFactuur, PROMPT, RESPONSE_SCHEMA } from "../_shared/gemini.ts";
+import { type FactuurData, normaliseerFactuur, PROMPT, RESPONSE_SCHEMA } from "../_shared/gemini.ts";
 
 const BUCKET = "facturen";
-const STANDAARD_MODEL = "gemini-3.6-flash";
+const STANDAARD_MODELLEN = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
 // Alleen Gemini-modellen, en niets dat het URL-pad kan manipuleren.
 const MODEL_PATROON = /^gemini-[a-z0-9][a-z0-9.-]*$/;
 const MAX_BYTES = 15 * 1024 * 1024;
+// Edge Functions hebben een maximale looptijd; binnen dit budget blijven voor alle pogingen samen.
+const TIJDBUDGET_MS = 130_000;
+const MAX_POGING_MS = 60_000;
+const MIN_POGING_MS = 10_000;
 
 const MIME_TYPES: Record<string, string> = {
   pdf: "application/pdf",
@@ -49,7 +57,87 @@ function mimeTypeVoor(pad: string, blobType: string): string {
   return MIME_TYPES[extensie] ?? "application/octet-stream";
 }
 
+/** Volgorde van modellen: uit het secret GEMINI_MODELLEN, anders de standaardlijst. */
+function modelVolgorde(): string[] {
+  const modellen = (Deno.env.get("GEMINI_MODELLEN") ?? "")
+    .split(",")
+    .map((m) => m.trim())
+    .filter((m) => MODEL_PATROON.test(m));
+  return modellen.length > 0 ? modellen : STANDAARD_MODELLEN;
+}
+
+type Poging =
+  | { ok: true; factuur: FactuurData }
+  | { ok: false; status: number; melding: string; volgendeProberen: boolean };
+
+/** Eén scanpoging met één model. volgendeProberen = true als een ander model het wél kan lukken. */
+async function scanMetModel(model: string, geminiKey: string, body: unknown, timeoutMs: number): Promise<Poging> {
+  let response: Response;
+  try {
+    response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": geminiKey },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err) {
+    const timeout = err instanceof DOMException && err.name === "TimeoutError";
+    return {
+      ok: false,
+      status: timeout ? 504 : 502,
+      melding: timeout ? "Gemini reageerde niet op tijd." : "Kon geen verbinding maken met de Gemini API.",
+      volgendeProberen: true,
+    };
+  }
+
+  if (!response.ok) {
+    let melding = `Gemini API-fout (${response.status}).`;
+    try {
+      const data = await response.json();
+      if (data?.error?.message) melding = data.error.message;
+    } catch {
+      // negeren, gebruik generieke melding
+    }
+    // 404: model bestaat niet (meer); 408/429: time-out of limiet; 5xx: storing/overbelast.
+    // Andere fouten (bijv. ongeldige sleutel of onleesbaar bestand) gelden voor elk model.
+    const volgendeProberen =
+      response.status === 404 || response.status === 408 || response.status === 429 || response.status >= 500;
+    return { ok: false, status: response.status, melding, volgendeProberen };
+  }
+
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    return { ok: false, status: 502, melding: "Onleesbaar antwoord van Gemini.", volgendeProberen: true };
+  }
+
+  const parts: Array<{ text?: string; thought?: boolean }> = data?.candidates?.[0]?.content?.parts ?? [];
+  const tekst = parts.find((p) => typeof p.text === "string" && !p.thought)?.text;
+  if (!tekst) {
+    const reden = data?.candidates?.[0]?.finishReason;
+    return {
+      ok: false,
+      status: 502,
+      melding: reden ? `Geen resultaat ontvangen van Gemini (reden: ${reden}).` : "Geen resultaat ontvangen van Gemini.",
+      volgendeProberen: true,
+    };
+  }
+
+  try {
+    return { ok: true, factuur: normaliseerFactuur(JSON.parse(tekst)) };
+  } catch {
+    return {
+      ok: false,
+      status: 502,
+      melding: "Antwoord van Gemini kon niet worden gelezen als JSON.",
+      volgendeProberen: true,
+    };
+  }
+}
+
 Deno.serve(async (req) => {
+  const start = Date.now();
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS_HEADERS });
   if (req.method !== "POST") return fout(405, "Methode niet toegestaan.");
 
@@ -79,7 +167,7 @@ Deno.serve(async (req) => {
   if (authFout || !gebruiker) return fout(401, "Je sessie is verlopen. Log opnieuw in.");
 
   // 2. Invoer controleren
-  let invoer: { bestand_pad?: unknown; model?: unknown };
+  let invoer: { bestand_pad?: unknown };
   try {
     invoer = await req.json();
   } catch {
@@ -91,11 +179,6 @@ Deno.serve(async (req) => {
     return fout(403, "Geen toegang tot dit bestand.");
   }
 
-  const model = invoer.model == null || invoer.model === "" ? STANDAARD_MODEL : invoer.model;
-  if (typeof model !== "string" || !MODEL_PATROON.test(model)) {
-    return fout(400, "Ongeldige modelnaam. Gebruik bijvoorbeeld gemini-3.6-flash.");
-  }
-
   // 3. Bestand ophalen met de rechten van de gebruiker (Storage-policies blijven gelden)
   const { data: blob, error: downloadFout } = await supabase.storage.from(BUCKET).download(pad);
   if (downloadFout || !blob) return fout(404, "Het bestand is niet gevonden in de opslag.");
@@ -104,14 +187,11 @@ Deno.serve(async (req) => {
   }
 
   const base64 = encodeBase64(new Uint8Array(await blob.arrayBuffer()));
-  const mimeType = mimeTypeVoor(pad, blob.type);
-
-  // 4. Gemini aanroepen
   const body = {
     contents: [
       {
         role: "user",
-        parts: [{ text: PROMPT }, { inline_data: { mime_type: mimeType, data: base64 } }],
+        parts: [{ text: PROMPT }, { inline_data: { mime_type: mimeTypeVoor(pad, blob.type), data: base64 } }],
       },
     ],
     generationConfig: {
@@ -121,49 +201,32 @@ Deno.serve(async (req) => {
     },
   };
 
-  let response: Response;
-  try {
-    response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": geminiKey },
-      body: JSON.stringify(body),
-    });
-  } catch (err) {
-    console.error("Gemini niet bereikbaar", err);
-    return fout(502, "Kon geen verbinding maken met de Gemini API. Probeer het later opnieuw.");
-  }
+  // 4. Gemini aanroepen; bij een onbereikbaar model automatisch het volgende proberen
+  const mislukt: Array<Extract<Poging, { ok: false }>> = [];
+  for (const model of modelVolgorde()) {
+    const resterend = TIJDBUDGET_MS - (Date.now() - start);
+    if (resterend < MIN_POGING_MS) break;
 
-  if (!response.ok) {
-    let melding = `Gemini API-fout (${response.status}).`;
-    try {
-      const data = await response.json();
-      if (data?.error?.message) melding = data.error.message;
-    } catch {
-      // negeren, gebruik generieke melding
+    const poging = await scanMetModel(model, geminiKey, body, Math.min(MAX_POGING_MS, resterend));
+    if (poging.ok) {
+      if (mislukt.length > 0) console.warn(`Uitgeweken naar ${model} na ${mislukt.length} mislukte poging(en).`);
+      return json(200, { factuur: poging.factuur, model });
     }
-    console.error("Gemini-fout", response.status, melding);
-    if (response.status === 404) return fout(400, `Model "${model}" bestaat niet of is niet beschikbaar.`);
-    if (response.status === 429) return fout(429, "Gemini-limiet bereikt. Wacht even en probeer het opnieuw.");
-    return fout(502, melding);
+
+    console.error(`Gemini-fout bij ${model}`, poging.status, poging.melding);
+    mislukt.push(poging);
+
+    if (!poging.volgendeProberen) {
+      if (poging.status === 401 || poging.status === 403 || /api key/i.test(poging.melding)) {
+        return fout(500, "De Gemini API-sleutel van de scanservice is ongeldig of heeft geen toegang.");
+      }
+      return fout(502, poging.melding);
+    }
   }
 
-  const data = await response.json();
-  const parts: Array<{ text?: string; thought?: boolean }> = data?.candidates?.[0]?.content?.parts ?? [];
-  const tekst = parts.find((p) => typeof p.text === "string" && !p.thought)?.text;
-  if (!tekst) {
-    const reden = data?.candidates?.[0]?.finishReason;
-    return fout(
-      502,
-      reden ? `Geen resultaat ontvangen van Gemini (reden: ${reden}).` : "Geen resultaat ontvangen van Gemini.",
-    );
+  if (mislukt.length > 0 && mislukt.every((p) => p.status === 429)) {
+    return fout(429, "Alle Gemini-modellen hebben hun limiet bereikt. Wacht even en probeer het opnieuw.");
   }
-
-  let geparsed: unknown;
-  try {
-    geparsed = JSON.parse(tekst);
-  } catch {
-    return fout(502, "Antwoord van Gemini kon niet worden gelezen als JSON.");
-  }
-
-  return json(200, { factuur: normaliseerFactuur(geparsed), model });
+  const laatste = mislukt.at(-1)?.melding ?? "tijdslimiet bereikt";
+  return fout(502, `Geen enkel Gemini-model kon de factuur verwerken (${laatste}). Probeer het later opnieuw.`);
 });
