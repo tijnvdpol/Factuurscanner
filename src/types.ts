@@ -53,8 +53,27 @@ export interface Signaal {
   created_at: string;
 }
 
+export interface Grootboekrekening {
+  id: string;
+  code: string;
+  omschrijving: string;
+  actief: boolean;
+}
+
+export type CoderingBron = "handmatig" | "historie" | "ai";
+
+/** Grootboekrekening van een factuur, met waar die vandaan komt. Zekerheid (0–1) alleen bij een voorstel. */
+export interface Codering {
+  grootboekrekening_id: string | null;
+  bron: CoderingBron | null;
+  zekerheid: number | null;
+}
+
+export const GEEN_CODERING: Codering = { grootboekrekening_id: null, bron: null, zekerheid: null };
+
 export interface Factuur extends FactuurData {
   id: string;
+  codering: Codering;
   /** Het bekende IBAN van de gekoppelde leverancier (kan afwijken van het IBAN op de factuur). */
   leverancier_iban: string | null;
   signalen: Signaal[];

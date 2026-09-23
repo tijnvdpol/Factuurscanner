@@ -1,5 +1,6 @@
 import { FunctionsFetchError, FunctionsHttpError } from "@supabase/supabase-js";
 import type { FactuurData } from "../types";
+import type { AiVoorstel } from "./codering";
 import { supabase } from "./supabase";
 
 // De Gemini-aanroep (prompt, schema, API-sleutel en modelkeuze met automatische fallback) draait
@@ -10,6 +11,8 @@ export class GeminiError extends Error {}
 interface ScanAntwoord {
   factuur: FactuurData;
   model: string;
+  /** Door de AI gekozen grootboekrekening (alleen als de functie rekeningen kon ophalen). */
+  codering?: AiVoorstel | null;
 }
 
 async function foutmeldingUit(error: unknown): Promise<string> {

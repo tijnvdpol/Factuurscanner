@@ -4,7 +4,11 @@ import UploadZone from "./components/UploadZone";
 import FactuurFormulier from "./components/FactuurFormulier";
 import FacturenTabel from "./components/FacturenTabel";
 import SignalenBlok from "./components/SignalenBlok";
+import CoderingVeld from "./components/CoderingVeld";
+import GrootboekBeheer from "./components/GrootboekBeheer";
 import { voorspelSignalen } from "./lib/signalen";
+import { kiesCoderingsvoorstel } from "./lib/codering";
+import { haalHistorieVoorstel, haalRekeningenOp } from "./lib/grootboekApi";
 import { GeminiError, scanFactuur } from "./lib/gemini";
 import { valideerFactuur } from "./lib/validatie";
 import { supabase } from "./lib/supabase";
@@ -18,7 +22,18 @@ import {
   verwijderFactuur,
 } from "./lib/facturenApi";
 import { downloadCsv } from "./lib/csv";
-import { alleenFactuurData, legeFactuurData, type Factuur, type FactuurData, type FactuurStatus } from "./types";
+import {
+  alleenFactuurData,
+  GEEN_CODERING,
+  legeFactuurData,
+  type Codering,
+  type Factuur,
+  type FactuurData,
+  type FactuurStatus,
+  type Grootboekrekening,
+} from "./types";
+
+type Pagina = "facturen" | "grootboek";
 
 // Facturen van vóór de Supabase-koppeling; alleen nog gelezen voor de eenmalige import.
 const LOKALE_FACTUREN = "factuurscanner_facturen";
@@ -35,6 +50,7 @@ function laadLokaleFacturen(): Factuur[] {
       bestand_pad: f.bestand_pad ?? null,
       leverancier_iban: null,
       signalen: [],
+      codering: GEEN_CODERING,
       status: "gecontroleerd",
       ai_model: null,
     }));
@@ -57,6 +73,7 @@ interface Concept {
   /** Leveranciersnaam bij het openen; bepaalt of IBAN e.d. van die leverancier overschreven mogen worden. */
   origineleLeverancier: string | null;
   data: FactuurData;
+  codering: Codering;
 }
 
 /** Ruimt het geüploade bestand op van een nieuw concept dat niet wordt opgeslagen. */
@@ -82,6 +99,18 @@ export default function App({ sessie }: Props) {
   const [foutmelding, setFoutmelding] = useState<string | null>(null);
   const [melding, setMelding] = useState<string | null>(null);
   const [concept, setConcept] = useState<Concept | null>(null);
+  const [rekeningen, setRekeningen] = useState<Grootboekrekening[]>([]);
+  const [pagina, setPagina] = useState<Pagina>("facturen");
+
+  const vernieuwRekeningen = useCallback(async () => {
+    setRekeningen(await haalRekeningenOp());
+  }, []);
+
+  useEffect(() => {
+    haalRekeningenOp()
+      .then(setRekeningen)
+      .catch((err) => console.warn("Grootboekrekeningen laden mislukt:", err));
+  }, []);
 
   const vernieuw = useCallback(async () => {
     try {
@@ -141,7 +170,9 @@ export default function App({ sessie }: Props) {
     let pad: string | null = null;
     try {
       pad = await uploadFactuurBestand(sessie.user.id, factuurId, bestand);
-      const { factuur: data, model: aiModel } = await scanFactuur(pad);
+      const { factuur: data, model: aiModel, codering: aiVoorstel } = await scanFactuur(pad);
+      // Historie gaat vóór AI; lukt het ophalen niet, dan valt het voorstel terug op de AI.
+      const historie = data.leverancier ? await haalHistorieVoorstel(data.leverancier).catch(() => null) : null;
       ruimConceptBestandOp(concept);
       setConcept({
         factuurId,
@@ -152,6 +183,7 @@ export default function App({ sessie }: Props) {
         status: "gecontroleerd",
         origineleLeverancier: null,
         data,
+        codering: kiesCoderingsvoorstel(historie, aiVoorstel ?? null, rekeningen),
       });
     } catch (err) {
       if (pad) verwijderBestand(pad).catch((e) => console.warn(e));
@@ -177,8 +209,21 @@ export default function App({ sessie }: Props) {
       status,
       origineleLeverancier: data.leverancier,
       data,
+      codering: factuur.codering,
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
+    // Nog niet gecodeerd: voorstel uit de historie van deze leverancier ophalen.
+    if (!factuur.codering.grootboekrekening_id && data.leverancier) {
+      haalHistorieVoorstel(data.leverancier)
+        .then((historie) => {
+          const voorstel = kiesCoderingsvoorstel(historie, null, rekeningen);
+          if (!voorstel.grootboekrekening_id) return;
+          setConcept((huidig) =>
+            huidig?.bewerkId === id && !huidig.codering.grootboekrekening_id ? { ...huidig, codering: voorstel } : huidig,
+          );
+        })
+        .catch((err) => console.warn(err));
+    }
   };
 
   const verwijderRij = async (id: string) => {
@@ -224,6 +269,7 @@ export default function App({ sessie }: Props) {
         bestandPad: concept.bestandPad,
         bestandsnaam: concept.bestandsnaam,
         aiModel: concept.aiModel,
+        codering: concept.codering,
         leverancierBijwerken: concept.bewerkId !== null && zelfdeLeverancier,
       });
       setConcept(null);
@@ -242,7 +288,7 @@ export default function App({ sessie }: Props) {
     try {
       const actueel = await haalFacturenOp();
       setFacturen(actueel);
-      downloadCsv(actueel);
+      downloadCsv(actueel, rekeningen);
     } catch (err) {
       setFoutmelding(foutTekst(err, "Exporteren is mislukt."));
     } finally {
@@ -280,6 +326,25 @@ export default function App({ sessie }: Props) {
             <h1 className="text-lg font-semibold text-slate-900">Factuurscanner</h1>
             <p className="text-xs text-slate-400">Scan, controleer en exporteer facturen</p>
           </div>
+          <nav className="flex items-center gap-1">
+            {(
+              [
+                ["facturen", "Facturen"],
+                ["grootboek", "Grootboekrekeningen"],
+              ] as const
+            ).map(([sleutel, label]) => (
+              <button
+                key={sleutel}
+                type="button"
+                onClick={() => setPagina(sleutel)}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium ${
+                  pagina === sleutel ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </nav>
           <div className="flex items-center gap-2">
             <span className="hidden truncate text-xs text-slate-400 sm:inline">{sessie.user.email}</span>
             <button
@@ -294,6 +359,12 @@ export default function App({ sessie }: Props) {
       </header>
 
       <main className="mx-auto max-w-5xl space-y-6 px-4 py-6">
+        {pagina === "grootboek" && (
+          <GrootboekBeheer rekeningen={rekeningen} magBeheren onGewijzigd={vernieuwRekeningen} />
+        )}
+
+        {pagina === "facturen" && (
+        <>
         <UploadZone onFile={verwerkBestand} bezig={bezig} />
 
         {foutmelding && (
@@ -324,6 +395,11 @@ export default function App({ sessie }: Props) {
             onAnnuleren={annuleerConcept}
             opslaan={opslaan}
           >
+            <CoderingVeld
+              codering={concept.codering}
+              rekeningen={rekeningen}
+              onChange={(codering) => setConcept((huidig) => (huidig ? { ...huidig, codering } : huidig))}
+            />
             <SignalenBlok
               signalen={conceptFactuur?.signalen ?? []}
               voorspeld={voorspeldeSignalen}
@@ -375,6 +451,8 @@ export default function App({ sessie }: Props) {
           onBekijken={bekijkOrigineel}
           onExporteren={exporteerCsv}
         />
+        </>
+        )}
       </main>
     </div>
   );

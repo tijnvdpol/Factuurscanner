@@ -1,5 +1,14 @@
 import type { PostgrestError } from "@supabase/supabase-js";
-import { alleenFactuurData, type Factuur, type FactuurData, type FactuurStatus, type Signaal } from "../types";
+import {
+  alleenFactuurData,
+  GEEN_CODERING,
+  type Codering,
+  type CoderingBron,
+  type Factuur,
+  type FactuurData,
+  type FactuurStatus,
+  type Signaal,
+} from "../types";
 import { supabase } from "./supabase";
 import { verwijderBestand } from "./opslag";
 
@@ -14,6 +23,7 @@ export class DbError extends Error {
 const SELECT = `
   id, leverancier_naam, factuurnummer, factuurdatum, vervaldatum, valuta, bedrag_excl, totaal_incl,
   status, bestand_pad, bestandsnaam, ai_model, created_at, iban, btw_nummer, kvk_nummer,
+  grootboekrekening_id, codering_bron, codering_zekerheid,
   leverancier:leveranciers ( iban ),
   btw_regels ( volgorde, tarief, grondslag, btw_bedrag ),
   signalen:factuur_signalen (
@@ -38,6 +48,9 @@ interface FactuurRij {
   iban: string | null;
   btw_nummer: string | null;
   kvk_nummer: string | null;
+  grootboekrekening_id: string | null;
+  codering_bron: CoderingBron | null;
+  codering_zekerheid: number | string | null;
   leverancier: { iban: string | null } | null;
   btw_regels: {
     volgorde: number;
@@ -69,6 +82,11 @@ function naarFactuur(rij: FactuurRij): Factuur {
     btw_nummer: rij.btw_nummer,
     kvk_nummer: rij.kvk_nummer,
     leverancier_iban: rij.leverancier?.iban ?? null,
+    codering: {
+      grootboekrekening_id: rij.grootboekrekening_id,
+      bron: rij.codering_bron,
+      zekerheid: getal(rij.codering_zekerheid),
+    },
     signalen: [...rij.signalen].sort((a, b) => a.created_at.localeCompare(b.created_at)),
     bestandsnaam: rij.bestandsnaam,
     bestand_pad: rij.bestand_pad,
@@ -79,7 +97,7 @@ function naarFactuur(rij: FactuurRij): Factuur {
 }
 
 /** Vertaalt een Supabase/Postgres-fout naar een begrijpelijke Nederlandse melding. */
-function vertaalFout(error: PostgrestError, data?: FactuurData): DbError {
+export function vertaalFout(error: PostgrestError, data?: FactuurData): DbError {
   switch (error.code) {
     case "23505": {
       const wie = [data?.leverancier, data?.factuurnummer && `factuurnummer ${data.factuurnummer}`]
@@ -132,6 +150,7 @@ interface OpslaanInvoer {
   bestandPad: string | null;
   bestandsnaam: string | null;
   aiModel: string | null;
+  codering: Codering;
   /** true = ingevulde leveranciersgegevens (IBAN e.d.) overschrijven; false = alleen lege aanvullen. */
   leverancierBijwerken: boolean;
 }
@@ -146,6 +165,9 @@ export async function slaFactuurOp(invoer: OpslaanInvoer): Promise<string> {
       bestand_pad: invoer.bestandPad,
       bestandsnaam: invoer.bestandsnaam,
       ai_model: invoer.aiModel,
+      grootboekrekening_id: invoer.codering.grootboekrekening_id,
+      codering_bron: invoer.codering.bron,
+      codering_zekerheid: invoer.codering.zekerheid,
     },
     p_leverancier_bijwerken: invoer.leverancierBijwerken,
   });
@@ -190,6 +212,7 @@ export async function importeerLokaleFacturen(facturen: Factuur[], userId: strin
         bestandPad: eigenBestand ? factuur.bestand_pad : null,
         bestandsnaam,
         aiModel: ai_model,
+        codering: GEEN_CODERING,
         leverancierBijwerken: false,
       });
       resultaat.geimporteerd++;

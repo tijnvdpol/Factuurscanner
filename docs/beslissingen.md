@@ -77,3 +77,29 @@ Per keuze: **wat** er gekozen is, **waarom**, en welk **alternatief** is afgewog
 
 ### B16. Backfill van signalen
 - **Wat:** de migratie berekent signalen voor alle bestaande facturen (oudste eerst). Zonder ingelogde gebruiker (migratie/service role) slaat `bepaal_signalen` de toegangscontrole over.
+
+## Fase 2.3: coderingsvoorstel
+
+### B17. Standaardset van 16 rekeningen, gezaaid via een trigger op `auth.users`
+- **Wat:** `intern.seed_grootboekrekeningen(user_id)` maakt 16 gangbare kostenrekeningen aan (4000 Huisvestingskosten … 7100 Uitbesteed werk). Een trigger op `auth.users` roept die aan bij registratie, en de migratie doet een backfill voor bestaande gebruikers. In fase 3.1 verhuist dit naar organisaties.
+- **Waarom:** een trigger werkt ook voor accounts die via het dashboard worden aangemaakt. Bij "eerste login" kan dat worden overgeslagen.
+
+### B18. Rekeningen niet verwijderen, alleen deactiveren
+- **Wat:** er is geen DELETE-recht. Inactieve rekeningen worden niet voorgesteld en niet in de keuzelijst getoond, behalve als de factuur er al aan gekoppeld is.
+- **Waarom:** oude facturen, de CSV-export en de audit trail houden zo een geldige codering.
+
+### B19. Historievoorstel via RPC vanuit de frontend, AI-voorstel in dezelfde Gemini-aanroep
+- **Wat:** `scan-factuur` haalt de actieve rekeningen op met de JWT van de gebruiker (RLS), zet ze in de prompt en laat Gemini een `grootboek_code` + `grootboek_zekerheid` kiezen in dezelfde aanroep als de extractie. Onbekende codes worden genegeerd. Na de scan vraagt de frontend `stel_codering_voor(leverancier)` op. Historie gaat vóór AI (`kiesCoderingsvoorstel`, pure functie).
+- **Waarom:** de leverancier is pas na de scan bekend. Een aparte AI-aanroep kost extra tijd en quota. De keuze tussen historie en AI in een pure functie is eenvoudig te testen.
+- **Alternatief:** de historie in de Edge Function opzoeken. Dat kan, maar dan staat dezelfde logica op twee plekken (ook bij het openen van een ongecodeerde factuur is een historievoorstel nodig).
+- **Veiligheid:** omschrijvingen van rekeningen (gebruikersinvoer) gaan zonder regeleinden en backticks, en maximaal 100 tekens, de prompt in.
+
+### B20. Historie telt alleen handmatig bevestigde coderingen
+- **Wat:** `stel_codering_voor` kijkt alleen naar facturen met `codering_bron = 'handmatig'` en een actieve rekening. De zekerheid is het aandeel van de meest gebruikte rekening (bij gelijke stand wint de recentste). Een onbevestigd AI-voorstel dat zo wordt opgeslagen, blijft `ai` en telt niet mee.
+- **Waarom:** anders versterkt een fout AI-voorstel zichzelf.
+
+### B21. Bevestigen maakt de codering "handmatig"
+- **Wat:** het formulier toont "Voorgesteld (historie/AI, xx%)" met een knop **Bevestigen**. Bevestigen of een andere rekening kiezen zet de bron op `handmatig` (zekerheid leeg).
+
+### B22. CSV: twee nieuwe kolommen achteraan
+- **Wat:** "Grootboekrekening" (code) en "Omschrijving grootboekrekening", achteraan, zodat bestaande imports die op kolomvolgorde werken blijven werken. Dezelfde aanpak als in stap 1.
