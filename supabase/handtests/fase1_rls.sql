@@ -87,8 +87,10 @@ begin
   select status into v_tekst from public.facturen where id = v_f1;
   if v_tekst <> 'goedgekeurd' then raise exception 'FOUT 8b: status onterecht gewijzigd naar %', v_tekst; end if;
 
-  -- 9. updated_at-trigger
+  -- 9. updated_at-trigger (sinds stap 3 mogen gebruikers updated_at niet zelf zetten; als beheerder testen)
+  perform set_config('role', 'postgres', true);
   update public.facturen set updated_at = '2000-01-01' where id = v_f1;
+  perform set_config('role', 'authenticated', true);
   select updated_at into v_ts from public.facturen where id = v_f1;
   if v_ts < now() - interval '1 minute' then raise exception 'FOUT 9: updated_at-trigger werkt niet'; end if;
 
@@ -147,10 +149,11 @@ begin
   end;
   if not v_ok then raise exception 'FOUT 15: B kon factuur op naam van A aanmaken'; end if;
 
-  -- 16. B kan eigen factuur niet aan A's leverancier koppelen
+  -- 16. B kan eigen factuur niet aan A's leverancier koppelen (sinds stap 3: in B's eigen organisatie)
   v_ok := false;
   begin
-    insert into public.facturen (user_id, leverancier_id, factuurnummer) values (v_b, v_lev_a, 'NEP');
+    insert into public.facturen (organisatie_id, user_id, leverancier_id, factuurnummer)
+    values ((select organisatie_id from public.organisatie_leden where user_id = v_b), v_b, v_lev_a, 'NEP');
   exception when foreign_key_violation then v_ok := true;
   end;
   if not v_ok then raise exception 'FOUT 16: B kon factuur koppelen aan leverancier van A'; end if;

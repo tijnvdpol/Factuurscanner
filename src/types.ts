@@ -119,3 +119,31 @@ export function alleenFactuurData(f: FactuurData): FactuurData {
     kvk_nummer: f.kvk_nummer,
   };
 }
+
+export const ROLLEN = ["invoerder", "goedkeurder", "controller", "beheerder"] as const;
+export type Rol = (typeof ROLLEN)[number];
+
+export const ROL_LABELS: Record<Rol, string> = {
+  invoerder: "Invoerder",
+  goedkeurder: "Goedkeurder",
+  controller: "Controller",
+  beheerder: "Beheerder",
+};
+
+/** Lidmaatschap van de ingelogde gebruiker. */
+export interface Lidmaatschap {
+  organisatie_id: string;
+  naam: string;
+  rol: Rol;
+  /** null = onbeperkt */
+  goedkeuringslimiet: number | null;
+}
+
+/** Een (oud-)lid van de organisatie, voor namen in de historie en het ledenbeheer. */
+export interface OrgGebruiker {
+  user_id: string;
+  email: string;
+  rol: Rol | null;
+  goedkeuringslimiet: number | null;
+  is_lid: boolean;
+}

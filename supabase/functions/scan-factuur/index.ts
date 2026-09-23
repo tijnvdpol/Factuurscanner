@@ -1,6 +1,9 @@
 // Edge Function scan-factuur: leest een factuurbestand uit Storage en laat Gemini de velden herkennen.
 //
-// POST { bestand_pad: string }
+// POST { bestand_pad: string, organisatie_id?: string }
+//   bestand_pad = {organisatie_id}/{factuur_id}/{bestand} (of het oude {user_id}/…); toegang bepalen de
+//   Storage-policies. organisatie_id bepaalt uit welke grootboekrekeningen de AI kiest (standaard: de
+//   eerste map van het pad).
 //   200 { factuur: FactuurData, model: string, codering: AiCodering | null }
 //       model = het model dat de scan heeft gedaan; codering = door de AI gekozen grootboekrekening
 //       uit de actieve rekeningen van de gebruiker (met zekerheid 0–1), of null.
@@ -247,7 +250,7 @@ Deno.serve(async (req) => {
   if (authFout || !gebruiker) return fout(401, "Je sessie is verlopen. Log opnieuw in.");
 
   // 2. Invoer controleren
-  let invoer: { bestand_pad?: unknown };
+  let invoer: { bestand_pad?: unknown; organisatie_id?: unknown };
   try {
     invoer = await req.json();
   } catch {
@@ -255,9 +258,14 @@ Deno.serve(async (req) => {
   }
 
   const pad = invoer.bestand_pad;
-  if (typeof pad !== "string" || !pad.startsWith(`${gebruiker.id}/`) || pad.includes("..")) {
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  const eersteMap = typeof pad === "string" ? pad.split("/")[0] : "";
+  if (typeof pad !== "string" || !UUID.test(eersteMap) || pad.includes("..")) {
     return fout(403, "Geen toegang tot dit bestand.");
   }
+  const organisatieId = typeof invoer.organisatie_id === "string" && UUID.test(invoer.organisatie_id)
+    ? invoer.organisatie_id
+    : eersteMap;
 
   // 3. Bestand ophalen met de rechten van de gebruiker (Storage-policies blijven gelden)
   const { data: blob, error: downloadFout } = await supabase.storage.from(BUCKET).download(pad);
@@ -266,11 +274,12 @@ Deno.serve(async (req) => {
     return fout(413, "Bestand is groter dan 15 MB. Comprimeer het bestand en probeer opnieuw.");
   }
 
-  // Actieve grootboekrekeningen (RLS: alleen die van de gebruiker) voor het coderingsvoorstel.
+  // Actieve grootboekrekeningen van de organisatie (RLS: alleen als de gebruiker lid is).
   // Lukt dit niet, dan scannen we zonder voorstel.
   const { data: rekeningData, error: rekeningFout } = await supabase
     .from("grootboekrekeningen")
     .select("id, code, omschrijving")
+    .eq("organisatie_id", organisatieId)
     .eq("actief", true)
     .order("code");
   if (rekeningFout) console.warn("Grootboekrekeningen ophalen mislukt:", rekeningFout.message);

@@ -11,20 +11,36 @@ export function leesSql(relatiefPad: string): string {
   return readFileSync(join(SUPABASE_MAP, relatiefPad), "utf8");
 }
 
-export async function maakDatabase(): Promise<PGlite> {
-  const db = new PGlite();
-  await db.exec(leesSql("tests/platform.sql"));
-  const migraties = readdirSync(join(SUPABASE_MAP, "migrations"))
+function migraties(): string[] {
+  return readdirSync(join(SUPABASE_MAP, "migrations"))
     .filter((f) => f.endsWith(".sql"))
     .sort();
-  for (const bestand of migraties) {
+}
+
+/**
+ * Verse database met de platform-nabootsing en de migraties. Met `tot` alleen de migraties waarvan
+ * de bestandsnaam daarvóór komt (om een backfill te testen); vervolg dan met migreerVanaf().
+ */
+export async function maakDatabase(tot?: string): Promise<PGlite> {
+  const db = new PGlite();
+  await db.exec(leesSql("tests/platform.sql"));
+  await voerUit(db, migraties().filter((f) => tot === undefined || f < tot));
+  return db;
+}
+
+export async function migreerVanaf(db: PGlite, vanaf: string): Promise<void> {
+  await alsBeheerder(db);
+  await voerUit(db, migraties().filter((f) => f >= vanaf));
+}
+
+async function voerUit(db: PGlite, bestanden: string[]): Promise<void> {
+  for (const bestand of bestanden) {
     try {
       await db.exec(leesSql(`migrations/${bestand}`));
     } catch (err) {
       throw new Error(`Migratie ${bestand} faalt: ${(err as Error).message}`, { cause: err });
     }
   }
-  return db;
 }
 
 /** Schakelt de sessie naar een ingelogde gebruiker (rol authenticated), of naar anon bij null. */
@@ -54,4 +70,14 @@ export async function waarde<T>(db: PGlite, sql: string, params: unknown[] = [])
   const rij = rows[0];
   if (!rij) throw new Error(`Geen resultaat voor: ${sql}`);
   return Object.values(rij)[0];
+}
+
+/** Voert een query uit en geeft alle rijen terug. */
+export async function rijen<T>(db: PGlite, sql: string, params: unknown[] = []): Promise<T[]> {
+  return (await db.query<T>(sql, params)).rows;
+}
+
+export async function organisatieVan(db: PGlite, userId: string): Promise<string> {
+  await alsBeheerder(db);
+  return waarde<string>(db, "select organisatie_id from public.organisatie_leden where user_id = $1 order by created_at limit 1", [userId]);
 }

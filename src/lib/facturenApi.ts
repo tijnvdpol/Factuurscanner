@@ -96,8 +96,15 @@ function naarFactuur(rij: FactuurRij): Factuur {
   };
 }
 
+/** Standaardmeldingen van Postgres zelf; andere meldingen komen uit onze eigen (Nederlandse) functies. */
+const POSTGRES_MELDING = /permission denied|row-level security|duplicate key|violates|constraint/i;
+
 /** Vertaalt een Supabase/Postgres-fout naar een begrijpelijke Nederlandse melding. */
 export function vertaalFout(error: PostgrestError, data?: FactuurData): DbError {
+  // Eigen meldingen uit de databasefuncties (RAISE) direct doorgeven, bijv. "Alleen een beheerder ...".
+  if ((error.code === "42501" || error.code === "23505") && !POSTGRES_MELDING.test(error.message)) {
+    return new DbError(error.message, error.code);
+  }
   switch (error.code) {
     case "23505": {
       const wie = [data?.leverancier, data?.factuurnummer && `factuurnummer ${data.factuurnummer}`]
@@ -125,7 +132,7 @@ export function vertaalFout(error: PostgrestError, data?: FactuurData): DbError 
       // Eigen meldingen uit de databasefuncties (bijv. "Een toelichting is verplicht ...")
       return new DbError(error.message, error.code);
     case "42501":
-      return new DbError("Je hebt geen toegang tot deze factuur.", error.code);
+      return new DbError("Je hebt geen rechten voor deze actie.", error.code);
     case "PGRST301":
     case "PGRST303":
       return new DbError("Je sessie is verlopen. Log opnieuw in.", error.code);
@@ -137,14 +144,19 @@ export function vertaalFout(error: PostgrestError, data?: FactuurData): DbError 
   }
 }
 
-export async function haalFacturenOp(): Promise<Factuur[]> {
-  const { data, error } = await supabase.from("facturen").select(SELECT).order("created_at");
+export async function haalFacturenOp(organisatieId: string): Promise<Factuur[]> {
+  const { data, error } = await supabase
+    .from("facturen")
+    .select(SELECT)
+    .eq("organisatie_id", organisatieId)
+    .order("created_at");
   if (error) throw vertaalFout(error);
   return (data as unknown as FactuurRij[]).map(naarFactuur);
 }
 
 interface OpslaanInvoer {
   id: string;
+  organisatieId: string;
   data: FactuurData;
   status: FactuurStatus;
   bestandPad: string | null;
@@ -161,6 +173,7 @@ export async function slaFactuurOp(invoer: OpslaanInvoer): Promise<string> {
     p_factuur: {
       ...invoer.data,
       id: invoer.id,
+      organisatie_id: invoer.organisatieId,
       status: invoer.status,
       bestand_pad: invoer.bestandPad,
       bestandsnaam: invoer.bestandsnaam,
@@ -194,7 +207,11 @@ export interface ImportResultaat {
 }
 
 /** Eenmalige import van facturen uit localStorage (van vóór de Supabase-koppeling). */
-export async function importeerLokaleFacturen(facturen: Factuur[], userId: string): Promise<ImportResultaat> {
+export async function importeerLokaleFacturen(
+  facturen: Factuur[],
+  userId: string,
+  organisatieId: string,
+): Promise<ImportResultaat> {
   const resultaat: ImportResultaat = { geimporteerd: 0, duplicaten: 0, mislukt: [] };
 
   for (const factuur of facturen) {
@@ -207,6 +224,7 @@ export async function importeerLokaleFacturen(facturen: Factuur[], userId: strin
     try {
       await slaFactuurOp({
         id: eigenBestand ? factuur.id : crypto.randomUUID(),
+        organisatieId,
         data,
         status: "gecontroleerd",
         bestandPad: eigenBestand ? factuur.bestand_pad : null,

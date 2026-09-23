@@ -3,10 +3,11 @@ import type { HistorieVoorstel } from "./codering";
 import { DbError, vertaalFout } from "./facturenApi";
 import { supabase } from "./supabase";
 
-export async function haalRekeningenOp(): Promise<Grootboekrekening[]> {
+export async function haalRekeningenOp(organisatieId: string): Promise<Grootboekrekening[]> {
   const { data, error } = await supabase
     .from("grootboekrekeningen")
     .select("id, code, omschrijving, actief")
+    .eq("organisatie_id", organisatieId)
     .order("code");
   if (error) throw vertaalFout(error);
   return data;
@@ -32,8 +33,10 @@ function rekeningFout(error: Parameters<typeof vertaalFout>[0]): DbError {
   return error.code === "23505" ? new DbError("Er bestaat al een rekening met deze code.", error.code) : vertaalFout(error);
 }
 
-export async function voegRekeningToe(invoer: RekeningInvoer): Promise<void> {
-  const { error } = await supabase.from("grootboekrekeningen").insert(controleer(invoer));
+export async function voegRekeningToe(organisatieId: string, invoer: RekeningInvoer): Promise<void> {
+  const { error } = await supabase
+    .from("grootboekrekeningen")
+    .insert({ ...controleer(invoer), organisatie_id: organisatieId });
   if (error) throw rekeningFout(error);
 }
 
@@ -43,8 +46,11 @@ export async function wijzigRekening(id: string, invoer: RekeningInvoer): Promis
 }
 
 /** Meest gebruikte handmatig bevestigde rekening voor deze leverancier, of null. */
-export async function haalHistorieVoorstel(leverancier: string): Promise<HistorieVoorstel | null> {
-  const { data, error } = await supabase.rpc("stel_codering_voor", { p_leverancier: leverancier });
+export async function haalHistorieVoorstel(organisatieId: string, leverancier: string): Promise<HistorieVoorstel | null> {
+  const { data, error } = await supabase.rpc("stel_codering_voor", {
+    p_organisatie_id: organisatieId,
+    p_leverancier: leverancier,
+  });
   if (error) throw vertaalFout(error);
   const rij = (data as { grootboekrekening_id: string; zekerheid: number | string }[] | null)?.[0];
   return rij ? { grootboekrekening_id: rij.grootboekrekening_id, zekerheid: Number(rij.zekerheid) } : null;

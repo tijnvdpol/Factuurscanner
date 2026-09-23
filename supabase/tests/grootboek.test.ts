@@ -5,6 +5,7 @@ import { alsGebruiker, maakDatabase, maakGebruiker, waarde } from "./db";
 let db: PGlite;
 let a: string;
 let b: string;
+let orgA: string;
 
 async function slaOp(factuur: Record<string, unknown>): Promise<string> {
   return waarde<string>(db, "select public.sla_factuur_op($1::jsonb)", [JSON.stringify(factuur)]);
@@ -18,6 +19,7 @@ beforeAll(async () => {
   db = await maakDatabase();
   a = await maakGebruiker(db, "a@example.invalid");
   b = await maakGebruiker(db, "b@example.invalid");
+  orgA = await waarde(db, "select organisatie_id from public.organisatie_leden where user_id = $1", [a]);
 });
 
 afterAll(async () => {
@@ -33,12 +35,12 @@ describe("grootboekrekeningen", () => {
 
   it("toevoegen, wijzigen en deactiveren; verwijderen kan niet", async () => {
     await alsGebruiker(db, a);
-    await db.query("insert into public.grootboekrekeningen (code, omschrijving) values ('4410', 'Hosting')");
+    await db.query("insert into public.grootboekrekeningen (organisatie_id, code, omschrijving) values ($1, '4410', 'Hosting')", [orgA]);
     await db.query("update public.grootboekrekeningen set omschrijving = 'Hosting en domeinen', actief = false where code = '4410'");
     expect(await waarde(db, "select actief from public.grootboekrekeningen where code = '4410'")).toBe(false);
     await expect(db.query("delete from public.grootboekrekeningen where code = '4410'")).rejects.toThrow(/permission denied/);
     await expect(
-      db.query("insert into public.grootboekrekeningen (code, omschrijving) values ('4410', 'Dubbel')"),
+      db.query("insert into public.grootboekrekeningen (organisatie_id, code, omschrijving) values ($1, '4410', 'Dubbel')", [orgA]),
     ).rejects.toThrow(/duplicate key/);
   });
 
@@ -75,7 +77,7 @@ describe("codering", () => {
     await slaOp({ leverancier: "Hoster", factuurnummer: "H-3", grootboekrekening_id: kantoor, codering_bron: "handmatig" });
     await slaOp({ leverancier: "Hoster", factuurnummer: "H-4", grootboekrekening_id: kantoor, codering_bron: "handmatig" });
     const { rows } = await db.query<{ grootboekrekening_id: string; zekerheid: string }>(
-      "select grootboekrekening_id, zekerheid::text from public.stel_codering_voor(' hoster ')",
+      "select grootboekrekening_id, zekerheid::text from public.stel_codering_voor($1, ' hoster ')", [orgA],
     );
     expect(rows).toEqual([{ grootboekrekening_id: kantoor, zekerheid: "0.67" }]);
     expect(ict).not.toBe(kantoor);
@@ -85,16 +87,16 @@ describe("codering", () => {
     await alsGebruiker(db, a);
     const ict = await rekening("4400");
     await slaOp({ leverancier: "Alleen AI BV", factuurnummer: "A-1", grootboekrekening_id: ict, codering_bron: "ai", codering_zekerheid: 0.9 });
-    expect((await db.query("select * from public.stel_codering_voor('Alleen AI BV')")).rows).toEqual([]);
-    expect((await db.query("select * from public.stel_codering_voor('Onbekend')")).rows).toEqual([]);
+    expect((await db.query("select * from public.stel_codering_voor($1, 'Alleen AI BV')", [orgA])).rows).toEqual([]);
+    expect((await db.query("select * from public.stel_codering_voor($1, 'Onbekend')", [orgA])).rows).toEqual([]);
   });
 
   it("gedeactiveerde rekening wordt niet voorgesteld", async () => {
     await alsGebruiker(db, a);
     const reis = await rekening("4150");
     await slaOp({ leverancier: "NS", factuurnummer: "NS-1", grootboekrekening_id: reis });
-    expect((await db.query("select * from public.stel_codering_voor('NS')")).rows).toHaveLength(1);
+    expect((await db.query("select * from public.stel_codering_voor($1, 'NS')", [orgA])).rows).toHaveLength(1);
     await db.query("update public.grootboekrekeningen set actief = false where id = $1", [reis]);
-    expect((await db.query("select * from public.stel_codering_voor('NS')")).rows).toEqual([]);
+    expect((await db.query("select * from public.stel_codering_voor($1, 'NS')", [orgA])).rows).toEqual([]);
   });
 });

@@ -35,9 +35,9 @@ async function foutmeldingUit(error: unknown): Promise<string> {
 }
 
 /** Laat de Edge Function het (al geüploade) bestand scannen en geeft de herkende velden + gebruikte model terug. */
-export async function scanFactuur(bestandPad: string): Promise<ScanAntwoord> {
+export async function scanFactuur(bestandPad: string, organisatieId: string): Promise<ScanAntwoord> {
   const { data, error } = await supabase.functions.invoke<ScanAntwoord>("scan-factuur", {
-    body: { bestand_pad: bestandPad },
+    body: { bestand_pad: bestandPad, organisatie_id: organisatieId },
   });
   if (error || !data) {
     throw new GeminiError(await foutmeldingUit(error));

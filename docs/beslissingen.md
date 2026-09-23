@@ -103,3 +103,53 @@ Per keuze: **wat** er gekozen is, **waarom**, en welk **alternatief** is afgewog
 
 ### B22. CSV: twee nieuwe kolommen achteraan
 - **Wat:** "Grootboekrekening" (code) en "Omschrijving grootboekrekening", achteraan, zodat bestaande imports die op kolomvolgorde werken blijven werken. Dezelfde aanpak als in stap 1.
+
+## Fase 3.1: organisaties en rollen
+
+### B23. `is_lid` en `heeft_rol` in `public`, security definer
+- **Wat:** `public.is_lid(org)` en `public.heeft_rol(org, rollen[])` lezen `organisatie_leden` als eigenaar. Daardoor is er geen recursie via de RLS van die tabel. Ze staan in `public` (namen uit de opdracht) en geven alleen informatie over de eigen lidmaatschappen.
+- **Alternatief:** in `intern`. Dat kan ook, maar de frontend zou ze dan niet kunnen gebruiken.
+
+### B24. Leden alleen via RPC's
+- **Wat:** `authenticated` heeft alleen SELECT op `organisatie_leden`. Toevoegen, wijzigen en verwijderen gaan via `voeg_lid_toe`, `wijzig_lid` en `verwijder_lid` (security definer, alleen beheerder).
+- **Laatste beheerder:** die kan niet worden verwijderd of gedegradeerd. De controle zit in de RPC's, en de rij van de organisatie wordt eerst gelockt (`for update`). Zo kunnen twee beheerders elkaar niet tegelijk degraderen.
+- **Alternatief:** een trigger. Die blokkeert dan ook het cascade-verwijderen van een account.
+- **E-mailadres zoeken:** `voeg_lid_toe` zoekt in `auth.users`, zonder onderscheid in hoofdletters. Bestaat het account niet, dan volgt een duidelijke melding ("laat de persoon eerst registreren"). Uitnodigen per e-mail valt buiten deze stap.
+
+### B25. Nieuwe gebruiker → organisatie via een trigger op `auth.users`, met een vangnet bij de eerste login
+- **Wat:** trigger `organisatie_voor_nieuwe_gebruiker` maakt "Organisatie van {e-mail}" met de gebruiker als beheerder. Een trigger op `organisaties` zaait de 16 standaardrekeningen. De frontend roept `zorg_voor_organisatie()` aan als iemand toch geen organisatie heeft.
+- De grootboek-trigger per gebruiker uit fase 2.3 is vervangen.
+
+### B26. Uniciteit en koppelingen per organisatie
+- Leverancier uniek op (organisatie, naam) en rekening uniek op (organisatie, code). Samengestelde foreign keys (`leverancier_id`, `organisatie_id`) en (`grootboekrekening_id`, `organisatie_id`), zodat een factuur niet aan een leverancier of rekening van een andere organisatie kan hangen. De duplicaatindex is nu per organisatie.
+
+### B27. Data blijft bij de organisatie als een account verdwijnt
+- **Wat:** `user_id` op facturen, leveranciers en rekeningen: `on delete cascade` wordt `on delete set null` (kolom nullable).
+- **Waarom:** in een organisatie zou het verwijderen van een invoerder anders al "zijn" facturen van de organisatie wissen.
+
+### B28. Kolomrechten in plaats van alleen RLS
+- **Wat:**
+  - `facturen`: UPDATE alleen op inhoudelijke kolommen, dus niet op `user_id` (ingevoerd door), `organisatie_id` of `created_at`
+  - `leveranciers`: UPDATE alleen op naam, btw- en KvK-nummer, en geen DELETE
+  - `grootboekrekeningen`: UPDATE op code, omschrijving en actief
+- **Waarom:** anders kan een invoerder via de API zichzelf onzichtbaar maken voor de functiescheiding (`user_id` wijzigen). Hij zou ook het bekende IBAN kunnen overschrijven, of een leverancier verwijderen en opnieuw aanmaken met een ander IBAN zonder signaal.
+- **Gevolg:** `sla_factuur_op` vult een leeg IBAN via `intern.vul_leveranciers_iban` (security definer).
+
+### B29. Wie mag wat (buiten de statusworkflow)
+- Grootboekrekeningen beheren: **controller en beheerder**.
+- Een **kritiek** signaal oplossen, of een IBAN overnemen: **goedkeurder, controller of beheerder**, of het enige lid van een organisatie. Anders zou de invoerder zijn eigen kritieke signaal kunnen wegklikken.
+- De naam van de organisatie wijzigen: beheerder (kolomrecht op `naam`).
+
+### B30. Storage: nieuwe paden `{organisatie_id}/…`, oude paden blijven leesbaar
+- **Lezen:** in een organisatiemap waarvan je lid bent, in je eigen oude `{user_id}`-map, of in een bestand waarnaar een factuur van jouw organisatie verwijst. Zo kunnen collega's ook oude bestanden openen.
+- **Uploaden:** in een organisatiemap, of (tijdelijk, voor een oudere frontend tijdens de uitrol) in de eigen `{user_id}`-map.
+- `sla_factuur_op` accepteert beide padvormen. `scan-factuur` controleert het pad niet meer op `user_id`; de Storage-policies bepalen de toegang, want het bestand wordt met de JWT van de gebruiker gedownload.
+
+### B31. Achterwaartse compatibiliteit van `sla_factuur_op`
+- Zonder `organisatie_id` gebruikt de functie de enige organisatie van de gebruiker. Heeft de gebruiker er meer, dan volgt de fout "Kies een organisatie.". Zo blijft de frontend van stap 1 werken tot de nieuwe is gedeployed.
+
+### B32. Actieve organisatie in localStorage
+- Alleen als gemak per browser (in try/catch). De database bepaalt de toegang. Bij meerdere organisaties staat er een keuzelijst in de header. De hele app wordt opnieuw opgebouwd (`key`) bij een wissel.
+
+### B33. `org_gebruikers(org)` voor namen
+- Geeft e-mailadressen van leden en van oud-leden die nog in de data voorkomen, alleen aan leden. Gebruikt voor "opgelost door", ledenbeheer en (fase 3.3) de historie.

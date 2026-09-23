@@ -3,6 +3,7 @@ import type { Grootboekrekening } from "../types";
 import { voegRekeningToe, wijzigRekening, type RekeningInvoer } from "../lib/grootboekApi";
 
 interface Props {
+  organisatieId: string;
   rekeningen: Grootboekrekening[];
   /** false = alleen bekijken (rol zonder beheerrechten). */
   magBeheren: boolean;
@@ -132,7 +133,7 @@ function RekeningRij({
 }
 
 /** Beheer van grootboekrekeningen: toevoegen, wijzigen en (de)activeren. */
-export default function GrootboekBeheer({ rekeningen, magBeheren, onGewijzigd }: Props) {
+export default function GrootboekBeheer({ organisatieId, rekeningen, magBeheren, onGewijzigd }: Props) {
   const [nieuw, setNieuw] = useState<RekeningInvoer>({ code: "", omschrijving: "", actief: true });
   const [bezig, setBezig] = useState(false);
   const [fout, setFout] = useState<string | null>(null);
@@ -142,7 +143,7 @@ export default function GrootboekBeheer({ rekeningen, magBeheren, onGewijzigd }:
     setBezig(true);
     setFout(null);
     try {
-      await voegRekeningToe(nieuw);
+      await voegRekeningToe(organisatieId, nieuw);
       await onGewijzigd();
       setNieuw({ code: "", omschrijving: "", actief: true });
     } catch (err) {
@@ -159,6 +160,7 @@ export default function GrootboekBeheer({ rekeningen, magBeheren, onGewijzigd }:
         <p className="text-xs text-slate-400">
           Kostenrekeningen waaruit de codering van facturen wordt gekozen. Een rekening die niet meer gebruikt wordt,
           deactiveer je; verwijderen kan niet, zodat oude facturen hun codering houden.
+          {!magBeheren && " Alleen een controller of beheerder kan rekeningen wijzigen."}
         </p>
       </div>
 
