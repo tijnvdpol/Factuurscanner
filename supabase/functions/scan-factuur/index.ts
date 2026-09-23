@@ -1,7 +1,12 @@
 // Edge Function scan-factuur: leest een factuurbestand uit Storage en laat Gemini de velden herkennen.
 //
-// POST { bestand_pad: string }
-//   200 { factuur: FactuurData, model: string }   (model = het model dat de scan heeft gedaan)
+// POST { bestand_pad: string, organisatie_id?: string }
+//   bestand_pad = {organisatie_id}/{factuur_id}/{bestand} (of het oude {user_id}/…); toegang bepalen de
+//   Storage-policies. organisatie_id bepaalt uit welke grootboekrekeningen de AI kiest (standaard: de
+//   eerste map van het pad).
+//   200 { factuur: FactuurData, model: string, codering: AiCodering | null }
+//       model = het model dat de scan heeft gedaan; codering = door de AI gekozen grootboekrekening
+//       uit de actieve rekeningen van de gebruiker (met zekerheid 0–1), of null.
 //   4xx/5xx { error: string }  (Nederlandse foutmelding voor de gebruiker)
 //
 // Het model wordt automatisch gekozen: de functie vraagt bij Google op welke modellen beschikbaar zijn,
@@ -13,7 +18,14 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { encodeBase64 } from "jsr:@std/encoding@1/base64";
-import { type FactuurData, normaliseerFactuur, PROMPT, RESPONSE_SCHEMA } from "../_shared/gemini.ts";
+import {
+  type FactuurData,
+  maakPrompt,
+  maakResponseSchema,
+  normaliseerCodering,
+  normaliseerFactuur,
+  type Rekening,
+} from "../_shared/gemini.ts";
 
 const BUCKET = "facturen";
 const GEMINI_API = "https://generativelanguage.googleapis.com/v1beta";
@@ -137,7 +149,7 @@ function korteReden(poging: { status: number; melding: string }): string {
 }
 
 type Poging =
-  | { ok: true; factuur: FactuurData }
+  | { ok: true; factuur: FactuurData; ruw: unknown }
   | { ok: false; status: number; melding: string; volgendeProberen: boolean };
 
 /** Eén scanpoging met één model. volgendeProberen = true als een ander model het wél kan lukken. */
@@ -195,7 +207,8 @@ async function scanMetModel(model: string, geminiKey: string, body: unknown, tim
   }
 
   try {
-    return { ok: true, factuur: normaliseerFactuur(JSON.parse(tekst)) };
+    const ruw: unknown = JSON.parse(tekst);
+    return { ok: true, factuur: normaliseerFactuur(ruw), ruw };
   } catch {
     return {
       ok: false,
@@ -237,7 +250,7 @@ Deno.serve(async (req) => {
   if (authFout || !gebruiker) return fout(401, "Je sessie is verlopen. Log opnieuw in.");
 
   // 2. Invoer controleren
-  let invoer: { bestand_pad?: unknown };
+  let invoer: { bestand_pad?: unknown; organisatie_id?: unknown };
   try {
     invoer = await req.json();
   } catch {
@@ -245,9 +258,14 @@ Deno.serve(async (req) => {
   }
 
   const pad = invoer.bestand_pad;
-  if (typeof pad !== "string" || !pad.startsWith(`${gebruiker.id}/`) || pad.includes("..")) {
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  const eersteMap = typeof pad === "string" ? pad.split("/")[0] : "";
+  if (typeof pad !== "string" || !UUID.test(eersteMap) || pad.includes("..")) {
     return fout(403, "Geen toegang tot dit bestand.");
   }
+  const organisatieId = typeof invoer.organisatie_id === "string" && UUID.test(invoer.organisatie_id)
+    ? invoer.organisatie_id
+    : eersteMap;
 
   // 3. Bestand ophalen met de rechten van de gebruiker (Storage-policies blijven gelden)
   const { data: blob, error: downloadFout } = await supabase.storage.from(BUCKET).download(pad);
@@ -256,17 +274,28 @@ Deno.serve(async (req) => {
     return fout(413, "Bestand is groter dan 15 MB. Comprimeer het bestand en probeer opnieuw.");
   }
 
+  // Actieve grootboekrekeningen van de organisatie (RLS: alleen als de gebruiker lid is).
+  // Lukt dit niet, dan scannen we zonder voorstel.
+  const { data: rekeningData, error: rekeningFout } = await supabase
+    .from("grootboekrekeningen")
+    .select("id, code, omschrijving")
+    .eq("organisatie_id", organisatieId)
+    .eq("actief", true)
+    .order("code");
+  if (rekeningFout) console.warn("Grootboekrekeningen ophalen mislukt:", rekeningFout.message);
+  const rekeningen: Rekening[] = rekeningData ?? [];
+
   const base64 = encodeBase64(new Uint8Array(await blob.arrayBuffer()));
   const body = {
     contents: [
       {
         role: "user",
-        parts: [{ text: PROMPT }, { inline_data: { mime_type: mimeTypeVoor(pad, blob.type), data: base64 } }],
+        parts: [{ text: maakPrompt(rekeningen) }, { inline_data: { mime_type: mimeTypeVoor(pad, blob.type), data: base64 } }],
       },
     ],
     generationConfig: {
       responseMimeType: "application/json",
-      responseSchema: RESPONSE_SCHEMA,
+      responseSchema: maakResponseSchema(rekeningen),
       temperature: 0,
     },
   };
@@ -280,7 +309,7 @@ Deno.serve(async (req) => {
     const poging = await scanMetModel(model, geminiKey, body, Math.min(MAX_POGING_MS, resterend));
     if (poging.ok) {
       if (mislukt.length > 0) console.warn(`Uitgeweken naar ${model} na ${mislukt.length} mislukte poging(en).`);
-      return json(200, { factuur: poging.factuur, model });
+      return json(200, { factuur: poging.factuur, model, codering: normaliseerCodering(poging.ruw, rekeningen) });
     }
 
     console.error(`Gemini-fout bij ${model}`, poging.status, poging.melding);

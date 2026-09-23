@@ -13,13 +13,14 @@ function veiligeBestandsnaam(naam: string): string {
   return !veilig || veilig.startsWith(".") ? `factuur${veilig}` : veilig;
 }
 
-/** Uploadt het originele bestand naar {user_id}/{factuur_id}/{bestandsnaam} en geeft het pad terug. */
-export async function uploadFactuurBestand(userId: string, factuurId: string, bestand: File): Promise<string> {
+/** Uploadt het originele bestand naar {organisatie_id}/{factuur_id}/{bestandsnaam} en geeft het pad terug.
+ * (Bestanden van vóór de organisaties staan onder {user_id}/…; die blijven leesbaar.) */
+export async function uploadFactuurBestand(organisatieId: string, factuurId: string, bestand: File): Promise<string> {
   if (bestand.size > MAX_BYTES) {
     throw new OpslagError("Bestand is groter dan 15 MB. Comprimeer het bestand en probeer opnieuw.");
   }
 
-  const pad = `${userId}/${factuurId}/${veiligeBestandsnaam(bestand.name)}`;
+  const pad = `${organisatieId}/${factuurId}/${veiligeBestandsnaam(bestand.name)}`;
   const { error } = await supabase.storage.from(BUCKET).upload(pad, bestand, {
     contentType: bestand.type || undefined,
     upsert: false,

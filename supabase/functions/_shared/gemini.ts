@@ -1,5 +1,6 @@
 // Gemini-prompt, responsschema en normalisatie van het antwoord (overgenomen uit de frontend).
-// Houd FactuurData gelijk aan src/types.ts.
+// Houd FactuurData gelijk aan src/types.ts. Dit bestand heeft geen imports, zodat de frontend-tests
+// (Vitest) het ook kunnen testen.
 
 export interface BtwRegel {
   tarief: number | null;
@@ -21,7 +22,20 @@ export interface FactuurData {
   kvk_nummer: string | null;
 }
 
-export const RESPONSE_SCHEMA = {
+/** Een actieve grootboekrekening waaruit Gemini een keuze mag maken. */
+export interface Rekening {
+  id: string;
+  code: string;
+  omschrijving: string;
+}
+
+/** Het AI-coderingsvoorstel: id van de gekozen rekening en de zekerheid (0–1). */
+export interface AiCodering {
+  grootboekrekening_id: string;
+  zekerheid: number;
+}
+
+const RESPONSE_SCHEMA = {
   type: "OBJECT",
   properties: {
     leverancier: { type: "STRING", nullable: true, description: "Naam van de leverancier/verkoper." },
@@ -70,7 +84,29 @@ export const RESPONSE_SCHEMA = {
   ],
 } as const;
 
-export const PROMPT = `Je bent een assistent die factuurgegevens extraheert uit een afbeelding of PDF van een factuur.
+/** Responsschema; met rekeningen erbij ook een gekozen grootboekrekening en zekerheid. */
+export function maakResponseSchema(rekeningen: Rekening[]) {
+  if (rekeningen.length === 0) return RESPONSE_SCHEMA;
+  return {
+    ...RESPONSE_SCHEMA,
+    properties: {
+      ...RESPONSE_SCHEMA.properties,
+      grootboek_code: {
+        type: "STRING",
+        nullable: true,
+        description: "Code van de best passende grootboekrekening uit de lijst in de instructies, of null.",
+      },
+      grootboek_zekerheid: {
+        type: "NUMBER",
+        nullable: true,
+        description: "Hoe zeker je bent van de gekozen grootboekrekening, van 0 (gok) tot 1 (zeker).",
+      },
+    },
+    required: [...RESPONSE_SCHEMA.required, "grootboek_code", "grootboek_zekerheid"],
+  };
+}
+
+const BASIS_PROMPT = `Je bent een assistent die factuurgegevens extraheert uit een afbeelding of PDF van een factuur.
 
 Geef uitsluitend de gevraagde velden terug volgens het schema.
 Regels:
@@ -81,6 +117,36 @@ Regels:
 - btw_regels bevat één item per BTW-tarief dat op de factuur voorkomt, met de grondslag en het BTW-bedrag voor dat tarief.
 - Als er geen aparte BTW-specificatie op de factuur staat, geef een lege array terug voor btw_regels.
 - iban, btw_nummer en kvk_nummer zijn die van de LEVERANCIER (de verkoper die de factuur stuurt), nooit die van de klant/afnemer.`;
+
+/** Tekens die de prompt kunnen verstoren uit door de gebruiker ingevoerde omschrijvingen halen. */
+function veiligeTekst(tekst: string): string {
+  return tekst.replace(/[\r\n`]/g, " ").slice(0, 100);
+}
+
+/** Prompt; met rekeningen erbij ook de opdracht om een grootboekrekening te kiezen. */
+export function maakPrompt(rekeningen: Rekening[]): string {
+  if (rekeningen.length === 0) return BASIS_PROMPT;
+  const lijst = rekeningen.map((r) => `- ${veiligeTekst(r.code)}: ${veiligeTekst(r.omschrijving)}`).join("\n");
+  return `${BASIS_PROMPT}
+
+Kies daarnaast de grootboekrekening (kostensoort) die het best past bij wat er op deze factuur is gekocht.
+Kies uitsluitend een code uit deze lijst:
+${lijst}
+- grootboek_code: de code uit de lijst, of null als geen enkele rekening past.
+- grootboek_zekerheid: 0 tot 1. Gebruik een lage waarde als de factuur meerdere soorten kosten bevat of onduidelijk is.`;
+}
+
+/** Zet de gekozen code om naar een rekening uit de lijst; onbekende codes worden genegeerd. */
+export function normaliseerCodering(geparsed: unknown, rekeningen: Rekening[]): AiCodering | null {
+  const r = (geparsed ?? {}) as Record<string, unknown>;
+  const code = typeof r.grootboek_code === "string" ? r.grootboek_code.trim() : "";
+  const rekening = rekeningen.find((x) => x.code === code);
+  if (!rekening) return null;
+  const zekerheid = typeof r.grootboek_zekerheid === "number" && Number.isFinite(r.grootboek_zekerheid)
+    ? Math.min(1, Math.max(0, Math.round(r.grootboek_zekerheid * 100) / 100))
+    : 0;
+  return { grootboekrekening_id: rekening.id, zekerheid };
+}
 
 function tekstOfNull(waarde: unknown): string | null {
   return typeof waarde === "string" && waarde.trim() !== "" ? waarde.trim() : null;

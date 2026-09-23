@@ -1,4 +1,4 @@
-import { STATUS_LABELS, type Factuur } from "../types";
+import { STATUS_LABELS, type Factuur, type Grootboekrekening } from "../types";
 import { heeftFouten, valideerFactuur } from "./validatie";
 
 const TARIEVEN = [0, 9, 21] as const;
@@ -21,7 +21,8 @@ function somPerTarief(factuur: Factuur, tarief: number, veld: "grondslag" | "btw
   return regels.reduce((s, r) => s + (r[veld] ?? 0), 0);
 }
 
-export function genereerCsv(facturen: Factuur[]): string {
+export function genereerCsv(facturen: Factuur[], rekeningen: Grootboekrekening[] = []): string {
+  const rekeningPerId = new Map(rekeningen.map((r) => [r.id, r]));
   const kolommen = [
     "Leverancier",
     "Factuurnummer",
@@ -37,11 +38,14 @@ export function genereerCsv(facturen: Factuur[]): string {
     "IBAN leverancier",
     "BTW-nummer leverancier",
     "KvK-nummer leverancier",
+    "Grootboekrekening",
+    "Omschrijving grootboekrekening",
   ];
 
   const regels = facturen.map((f) => {
     const fouten = valideerFactuur(f);
     const status = heeftFouten(fouten) ? "Controleren" : "OK";
+    const rekening = f.codering.grootboekrekening_id ? rekeningPerId.get(f.codering.grootboekrekening_id) : undefined;
 
     const rij = [
       csvVeld(f.leverancier),
@@ -60,6 +64,8 @@ export function genereerCsv(facturen: Factuur[]): string {
       csvVeld(f.iban),
       csvVeld(f.btw_nummer),
       csvVeld(f.kvk_nummer),
+      csvVeld(rekening?.code ?? null),
+      csvVeld(rekening?.omschrijving ?? null),
     ];
     return rij.join(";");
   });
@@ -67,8 +73,16 @@ export function genereerCsv(facturen: Factuur[]): string {
   return [kolommen.join(";"), ...regels].join("\r\n");
 }
 
-export function downloadCsv(facturen: Factuur[], bestandsnaam = "facturen.csv"): void {
-  const inhoud = genereerCsv(facturen);
+export function downloadCsv(
+  facturen: Factuur[],
+  rekeningen: Grootboekrekening[] = [],
+  bestandsnaam = "facturen.csv",
+): void {
+  downloadTekst(genereerCsv(facturen, rekeningen), bestandsnaam);
+}
+
+/** Biedt een CSV-tekst aan als download. */
+export function downloadTekst(inhoud: string, bestandsnaam: string): void {
   // BOM zodat Excel de UTF-8 tekens (bijv. €) correct interpreteert
   const blob = new Blob(["﻿" + inhoud], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);

@@ -1,257 +1,104 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import UploadZone from "./components/UploadZone";
-import FactuurFormulier from "./components/FactuurFormulier";
-import FacturenTabel from "./components/FacturenTabel";
-import { GeminiError, scanFactuur } from "./lib/gemini";
-import { valideerFactuur } from "./lib/validatie";
+import FacturenPagina from "./components/FacturenPagina";
+import GrootboekBeheer from "./components/GrootboekBeheer";
+import LedenBeheer from "./components/LedenBeheer";
+import AuditLogPagina from "./components/AuditLogPagina";
+import type { WeergaveContext } from "./lib/audit";
+import { rekeningNaam } from "./lib/codering";
+import type { OrganisatieContext } from "./components/OrganisatiePoort";
+import { haalRekeningenOp } from "./lib/grootboekApi";
+import { haalOrgGebruikersOp } from "./lib/organisatieApi";
 import { supabase } from "./lib/supabase";
-import { OpslagError, openOrigineel, uploadFactuurBestand, verwijderBestand } from "./lib/opslag";
-import {
-  DbError,
-  haalFacturenOp,
-  importeerLokaleFacturen,
-  slaFactuurOp,
-  verwijderFactuur,
-} from "./lib/facturenApi";
-import { downloadCsv } from "./lib/csv";
-import { legeFactuurData, type Factuur, type FactuurData, type FactuurStatus } from "./types";
+import { ROL_LABELS, type Grootboekrekening, type OrgGebruiker, type Rol } from "./types";
 
-// Facturen van vóór de Supabase-koppeling; alleen nog gelezen voor de eenmalige import.
-const LOKALE_FACTUREN = "factuurscanner_facturen";
-// Uit de tijd dat de API-sleutel en het model in de browser stonden; worden opgeruimd.
-const VEROUDERDE_OPSLAG = ["factuurscanner_api_key", "factuurscanner_model"];
+type Pagina = "facturen" | "grootboek" | "leden" | "audit";
 
-function laadLokaleFacturen(): Factuur[] {
-  try {
-    const ruw = localStorage.getItem(LOKALE_FACTUREN);
-    const facturen = ruw ? (JSON.parse(ruw) as Factuur[]) : [];
-    return facturen.map((f) => ({
-      ...legeFactuurData(),
-      ...f,
-      bestand_pad: f.bestand_pad ?? null,
-      status: "gecontroleerd",
-      ai_model: null,
-    }));
-  } catch {
-    return [];
-  }
-}
+const PAGINAS: { sleutel: Pagina; label: string; rollen: Rol[] | null }[] = [
+  { sleutel: "facturen", label: "Facturen", rollen: null },
+  { sleutel: "grootboek", label: "Grootboekrekeningen", rollen: null },
+  { sleutel: "leden", label: "Leden", rollen: ["beheerder"] },
+  { sleutel: "audit", label: "Audit log", rollen: ["controller", "beheerder"] },
+];
 
-function foutTekst(err: unknown, standaard: string): string {
-  return err instanceof DbError || err instanceof GeminiError || err instanceof OpslagError ? err.message : standaard;
-}
-
-interface Concept {
-  factuurId: string;
-  bewerkId: string | null;
-  bestandsnaam: string | null;
-  bestandPad: string | null;
-  aiModel: string | null;
-  status: FactuurStatus;
-  /** Leveranciersnaam bij het openen; bepaalt of IBAN e.d. van die leverancier overschreven mogen worden. */
-  origineleLeverancier: string | null;
-  data: FactuurData;
-}
-
-/** Ruimt het geüploade bestand op van een nieuw concept dat niet wordt opgeslagen. */
-function ruimConceptBestandOp(concept: Concept | null) {
-  if (concept && !concept.bewerkId && concept.bestandPad) {
-    verwijderBestand(concept.bestandPad).catch((err) => console.warn(err));
-  }
-}
-
-interface Props {
+interface Props extends OrganisatieContext {
   sessie: Session;
 }
 
-export default function App({ sessie }: Props) {
-  const [facturen, setFacturen] = useState<Factuur[]>([]);
-  const [laden, setLaden] = useState(true);
-  const [laadFout, setLaadFout] = useState<string | null>(null);
-  const [lokaleFacturen, setLokaleFacturen] = useState<Factuur[]>(laadLokaleFacturen);
-  const [importeren, setImporteren] = useState(false);
-  const [exporteren, setExporteren] = useState(false);
-  const [bezig, setBezig] = useState(false);
-  const [opslaan, setOpslaan] = useState(false);
-  const [foutmelding, setFoutmelding] = useState<string | null>(null);
-  const [melding, setMelding] = useState<string | null>(null);
-  const [concept, setConcept] = useState<Concept | null>(null);
+export default function App({ sessie, lidmaatschap, lidmaatschappen, onWissel, onVernieuw }: Props) {
+  const organisatieId = lidmaatschap.organisatie_id;
+  const [pagina, setPagina] = useState<Pagina>("facturen");
+  const [rekeningen, setRekeningen] = useState<Grootboekrekening[]>([]);
+  const [gebruikers, setGebruikers] = useState<OrgGebruiker[]>([]);
 
-  const vernieuw = useCallback(async () => {
-    try {
-      setFacturen(await haalFacturenOp());
-      setLaadFout(null);
-    } catch (err) {
-      setLaadFout(foutTekst(err, "De facturen konden niet worden geladen."));
-    } finally {
-      setLaden(false);
-    }
-  }, []);
+  const vernieuwRekeningen = useCallback(async () => {
+    setRekeningen(await haalRekeningenOp(organisatieId));
+  }, [organisatieId]);
+
+  const vernieuwGebruikers = useCallback(async () => {
+    setGebruikers(await haalOrgGebruikersOp(organisatieId));
+  }, [organisatieId]);
 
   useEffect(() => {
-    let actief = true;
-    haalFacturenOp()
-      .then((lijst) => actief && setFacturen(lijst))
-      .catch((err) => actief && setLaadFout(foutTekst(err, "De facturen konden niet worden geladen.")))
-      .finally(() => actief && setLaden(false));
-    return () => {
-      actief = false;
-    };
-  }, []);
+    haalRekeningenOp(organisatieId)
+      .then(setRekeningen)
+      .catch((err) => console.warn("Grootboekrekeningen laden mislukt:", err));
+    haalOrgGebruikersOp(organisatieId)
+      .then(setGebruikers)
+      .catch((err) => console.warn("Leden laden mislukt:", err));
+  }, [organisatieId]);
 
-  useEffect(() => {
-    VEROUDERDE_OPSLAG.forEach((sleutel) => localStorage.removeItem(sleutel));
-  }, []);
-
-  const conceptFouten = useMemo(() => (concept ? valideerFactuur(concept.data) : {}), [concept]);
-
-  const verwerkBestand = async (bestand: File) => {
-    setFoutmelding(null);
-    setMelding(null);
-    setBezig(true);
-    const factuurId = crypto.randomUUID();
-    let pad: string | null = null;
-    try {
-      pad = await uploadFactuurBestand(sessie.user.id, factuurId, bestand);
-      const { factuur: data, model: aiModel } = await scanFactuur(pad);
-      ruimConceptBestandOp(concept);
-      setConcept({
-        factuurId,
-        bewerkId: null,
-        bestandsnaam: bestand.name,
-        bestandPad: pad,
-        aiModel,
-        status: "gecontroleerd",
-        origineleLeverancier: null,
-        data,
-      });
-    } catch (err) {
-      if (pad) verwijderBestand(pad).catch((e) => console.warn(e));
-      setFoutmelding(foutTekst(err, "Onbekende fout tijdens het scannen."));
-    } finally {
-      setBezig(false);
-    }
+  const weergave: WeergaveContext = {
+    naamVan: (userId) =>
+      gebruikers.find((g) => g.user_id === userId)?.email ?? (userId === sessie.user.id ? sessie.user.email : undefined),
+    rekeningNaam: (id) => {
+      const rekening = rekeningen.find((r) => r.id === id);
+      return rekening ? rekeningNaam(rekening) : undefined;
+    },
   };
 
-  const bewerkRij = (id: string) => {
-    const factuur = facturen.find((f) => f.id === id);
-    if (!factuur) return;
-    const { id: _id, bestandsnaam, bestand_pad, status, ai_model, aangemaaktOp: _a, ...data } = factuur;
-    ruimConceptBestandOp(concept);
-    setFoutmelding(null);
-    setConcept({
-      factuurId: id,
-      bewerkId: id,
-      bestandsnaam,
-      bestandPad: bestand_pad,
-      aiModel: ai_model,
-      status,
-      origineleLeverancier: data.leverancier,
-      data,
-    });
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  };
-
-  const verwijderRij = async (id: string) => {
-    const factuur = facturen.find((f) => f.id === id);
-    if (!factuur) return;
-    const omschrijving = [factuur.leverancier, factuur.factuurnummer].filter(Boolean).join(" – ") || "deze factuur";
-    if (!window.confirm(`Weet je zeker dat je ${omschrijving} wilt verwijderen? Dit kan niet ongedaan worden gemaakt.`)) {
-      return;
-    }
-    setFoutmelding(null);
-    try {
-      await verwijderFactuur(factuur);
-      setFacturen((huidig) => huidig.filter((f) => f.id !== id));
-      if (concept?.bewerkId === id) setConcept(null);
-    } catch (err) {
-      setFoutmelding(foutTekst(err, "Verwijderen is mislukt."));
-    }
-  };
-
-  const annuleerConcept = () => {
-    ruimConceptBestandOp(concept);
-    setConcept(null);
-    setFoutmelding(null);
-  };
-
-  const bekijkOrigineel = (pad: string) => {
-    setFoutmelding(null);
-    openOrigineel(pad).catch((err) => setFoutmelding(foutTekst(err, "Kon het originele bestand niet openen.")));
-  };
-
-  const slaConceptOp = async () => {
-    if (!concept) return;
-    setFoutmelding(null);
-    setOpslaan(true);
-    try {
-      const zelfdeLeverancier =
-        (concept.origineleLeverancier ?? "").trim().toLowerCase() ===
-        (concept.data.leverancier ?? "").trim().toLowerCase();
-      await slaFactuurOp({
-        id: concept.factuurId,
-        data: concept.data,
-        status: concept.status,
-        bestandPad: concept.bestandPad,
-        bestandsnaam: concept.bestandsnaam,
-        aiModel: concept.aiModel,
-        leverancierBijwerken: concept.bewerkId !== null && zelfdeLeverancier,
-      });
-      setConcept(null);
-      await vernieuw();
-    } catch (err) {
-      setFoutmelding(foutTekst(err, "Opslaan is mislukt."));
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    } finally {
-      setOpslaan(false);
-    }
-  };
-
-  const exporteerCsv = async () => {
-    setFoutmelding(null);
-    setExporteren(true);
-    try {
-      const actueel = await haalFacturenOp();
-      setFacturen(actueel);
-      downloadCsv(actueel);
-    } catch (err) {
-      setFoutmelding(foutTekst(err, "Exporteren is mislukt."));
-    } finally {
-      setExporteren(false);
-    }
-  };
-
-  const importeerLokaal = async () => {
-    setFoutmelding(null);
-    setMelding(null);
-    setImporteren(true);
-    try {
-      const { geimporteerd, duplicaten, mislukt } = await importeerLokaleFacturen(lokaleFacturen, sessie.user.id);
-      if (mislukt.length === 0) localStorage.removeItem(LOKALE_FACTUREN);
-      else localStorage.setItem(LOKALE_FACTUREN, JSON.stringify(mislukt));
-      setLokaleFacturen(mislukt);
-
-      const delen = [`${geimporteerd} factu${geimporteerd === 1 ? "ur" : "ren"} geïmporteerd`];
-      if (duplicaten > 0) delen.push(`${duplicaten} overgeslagen omdat ze al bestonden`);
-      setMelding(delen.join(", ") + ".");
-      if (mislukt.length > 0) {
-        setFoutmelding(`${mislukt.length} factu${mislukt.length === 1 ? "ur kon" : "ren konden"} niet worden geïmporteerd. Probeer het opnieuw.`);
-      }
-      await vernieuw();
-    } finally {
-      setImporteren(false);
-    }
-  };
+  const zichtbarePaginas = PAGINAS.filter((p) => !p.rollen || p.rollen.includes(lidmaatschap.rol));
+  const actievePagina = zichtbarePaginas.some((p) => p.sleutel === pagina) ? pagina : "facturen";
 
   return (
     <div className="min-h-screen bg-slate-100">
       <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-4">
-          <div>
+        <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 px-4 py-4">
+          <div className="min-w-0">
             <h1 className="text-lg font-semibold text-slate-900">Factuurscanner</h1>
-            <p className="text-xs text-slate-400">Scan, controleer en exporteer facturen</p>
+            {lidmaatschappen.length > 1 ? (
+              <select
+                value={organisatieId}
+                onChange={(e) => onWissel(e.target.value)}
+                aria-label="Organisatie"
+                className="mt-0.5 max-w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-800/20"
+              >
+                {lidmaatschappen.map((l) => (
+                  <option key={l.organisatie_id} value={l.organisatie_id}>
+                    {l.naam} ({ROL_LABELS[l.rol].toLowerCase()})
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <p className="truncate text-xs text-slate-400">
+                {lidmaatschap.naam} · {ROL_LABELS[lidmaatschap.rol].toLowerCase()}
+              </p>
+            )}
           </div>
+          <nav className="flex flex-wrap items-center gap-1">
+            {zichtbarePaginas.map(({ sleutel, label }) => (
+              <button
+                key={sleutel}
+                type="button"
+                onClick={() => setPagina(sleutel)}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium ${
+                  actievePagina === sleutel ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </nav>
           <div className="flex items-center gap-2">
             <span className="hidden truncate text-xs text-slate-400 sm:inline">{sessie.user.email}</span>
             <button
@@ -266,80 +113,37 @@ export default function App({ sessie }: Props) {
       </header>
 
       <main className="mx-auto max-w-5xl space-y-6 px-4 py-6">
-        <UploadZone onFile={verwerkBestand} bezig={bezig} />
-
-        {foutmelding && (
-          <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {foutmelding}
-          </div>
-        )}
-
-        {melding && (
-          <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-            {melding}
-          </div>
-        )}
-
-        {concept && (
-          <FactuurFormulier
-            key={concept.factuurId}
-            factuur={concept.data}
-            fouten={conceptFouten}
-            bewerken={concept.bewerkId !== null}
-            bestandsnaam={concept.bestandsnaam ?? undefined}
-            aiModel={concept.aiModel ?? undefined}
-            onBekijkOrigineel={concept.bestandPad ? () => bekijkOrigineel(concept.bestandPad!) : undefined}
-            onChange={(data) => setConcept((huidig) => (huidig ? { ...huidig, data } : huidig))}
-            status={concept.status}
-            onStatusChange={(status) => setConcept((huidig) => (huidig ? { ...huidig, status } : huidig))}
-            onOpslaan={slaConceptOp}
-            onAnnuleren={annuleerConcept}
-            opslaan={opslaan}
+        {actievePagina === "facturen" && (
+          <FacturenPagina
+            sessie={sessie}
+            lidmaatschap={lidmaatschap}
+            rekeningen={rekeningen}
+            gebruikers={gebruikers}
+            weergave={weergave}
           />
         )}
-
-        {lokaleFacturen.length > 0 && (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-            <span>
-              Er staan nog {lokaleFacturen.length} factu{lokaleFacturen.length === 1 ? "ur" : "ren"} alleen lokaal in
-              deze browser. Importeer ze naar je account zodat ze overal beschikbaar zijn.
-            </span>
-            <button
-              type="button"
-              onClick={importeerLokaal}
-              disabled={importeren}
-              className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-            >
-              {importeren ? "Importeren…" : "Lokale facturen importeren"}
-            </button>
-          </div>
+        {actievePagina === "grootboek" && (
+          <GrootboekBeheer
+            organisatieId={organisatieId}
+            rekeningen={rekeningen}
+            magBeheren={lidmaatschap.rol === "beheerder" || lidmaatschap.rol === "controller"}
+            onGewijzigd={vernieuwRekeningen}
+          />
         )}
-
-        {laadFout && (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            <span>{laadFout}</span>
-            <button
-              type="button"
-              onClick={() => {
-                setLaden(true);
-                void vernieuw();
-              }}
-              className="rounded-md border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50"
-            >
-              Opnieuw proberen
-            </button>
-          </div>
+        {actievePagina === "audit" && (
+          <AuditLogPagina organisatieId={organisatieId} gebruikers={gebruikers} weergave={weergave} />
         )}
-
-        <FacturenTabel
-          facturen={facturen}
-          laden={laden}
-          exporteren={exporteren}
-          onBewerken={bewerkRij}
-          onVerwijderen={verwijderRij}
-          onBekijken={bekijkOrigineel}
-          onExporteren={exporteerCsv}
-        />
+        {actievePagina === "leden" && (
+          <LedenBeheer
+            lidmaatschap={lidmaatschap}
+            gebruikers={gebruikers}
+            eigenUserId={sessie.user.id}
+            onGewijzigd={async () => {
+              await vernieuwGebruikers();
+              await onVernieuw();
+            }}
+          />
+        )}
       </main>
     </div>
   );
