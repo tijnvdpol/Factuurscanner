@@ -5,15 +5,16 @@ interface Props {
   codering: Codering;
   rekeningen: Grootboekrekening[];
   onChange: (codering: Codering) => void;
+  disabled?: boolean;
 }
 
 /** Keuze van de grootboekrekening, met het voorstel (historie/AI) en een knop om het te bevestigen. */
-export default function CoderingVeld({ codering, rekeningen, onChange }: Props) {
+export default function CoderingVeld({ codering, rekeningen, onChange, disabled = false }: Props) {
   const label = voorstelLabel(codering);
   const keuzes = rekeningen.filter((r) => r.actief || r.id === codering.grootboekrekening_id);
 
   return (
-    <div className="mt-5">
+    <fieldset disabled={disabled} className="mt-5 min-w-0">
       <h3 className="mb-2 text-xs font-semibold text-slate-600">Codering</h3>
       <div className="flex flex-wrap items-center gap-2">
         <select
@@ -49,6 +50,6 @@ export default function CoderingVeld({ codering, rekeningen, onChange }: Props) 
       {!codering.grootboekrekening_id && (
         <p className="mt-1 text-xs text-slate-400">Een grootboekrekening is nodig om de factuur te kunnen goedkeuren.</p>
       )}
-    </div>
+    </fieldset>
   );
 }

@@ -18,11 +18,20 @@ import {
   losSignaalOp,
   slaFactuurOp,
   verwijderFactuur,
+  wijzigStatus,
 } from "../lib/facturenApi";
+import {
+  FUNCTIESCHEIDING_MELDING,
+  valtTerugNaGewijzigd,
+  type MogelijkeActie,
+  type WorkflowContext,
+} from "../lib/workflow";
 import { downloadCsv } from "../lib/csv";
 import {
   alleenFactuurData,
   GEEN_CODERING,
+  LEGE_WORKFLOW,
+  STATUS_LABELS,
   legeFactuurData,
   type Codering,
   type Factuur,
@@ -49,7 +58,8 @@ function laadLokaleFacturen(): Factuur[] {
       leverancier_iban: null,
       signalen: [],
       codering: GEEN_CODERING,
-      status: "gecontroleerd",
+      workflow: LEGE_WORKFLOW,
+      status: "gescand",
       ai_model: null,
     }));
   } catch {
@@ -88,8 +98,13 @@ interface Props {
   gebruikers: OrgGebruiker[];
 }
 
+function datum(iso: string | null): string {
+  return iso ? new Date(iso).toLocaleDateString("nl-NL", { dateStyle: "medium" }) : "";
+}
+
 export default function FacturenPagina({ sessie, lidmaatschap, rekeningen, gebruikers }: Props) {
   const organisatieId = lidmaatschap.organisatie_id;
+  const [bezigId, setBezigId] = useState<string | null>(null);
   const [facturen, setFacturen] = useState<Factuur[]>([]);
   const [laden, setLaden] = useState(true);
   const [laadFout, setLaadFout] = useState<string | null>(null);
@@ -138,6 +153,15 @@ export default function FacturenPagina({ sessie, lidmaatschap, rekeningen, gebru
     }
   }, []);
 
+  const leden = gebruikers.filter((g) => g.is_lid);
+  const context: WorkflowContext = {
+    userId: sessie.user.id,
+    rol: lidmaatschap.rol,
+    goedkeuringslimiet: lidmaatschap.goedkeuringslimiet,
+    // Zolang de leden nog niet geladen zijn: niet uitgaan van "één lid" (dan zouden alle knoppen verschijnen).
+    aantalLeden: leden.length || 2,
+  };
+
   const conceptFouten = useMemo(() => (concept ? valideerFactuur(concept.data) : {}), [concept]);
 
   const conceptFactuur = concept?.bewerkId ? facturen.find((f) => f.id === concept.bewerkId) : undefined;
@@ -153,9 +177,42 @@ export default function FacturenPagina({ sessie, lidmaatschap, rekeningen, gebru
       null;
     return voorspelSignalen(
       { ...concept.data, id: concept.factuurId },
-      { anderen: facturen.filter((f) => f.id !== concept.factuurId), bekendIban, limieten: [] },
+      {
+        anderen: facturen.filter((f) => f.id !== concept.factuurId),
+        bekendIban,
+        // Goedkeuringslimieten van leden die mogen goedkeuren (voor "net onder limiet")
+        limieten: gebruikers
+          .filter((g) => g.is_lid && (g.rol === "goedkeurder" || g.rol === "controller" || g.rol === "beheerder"))
+          .map((g) => g.goedkeuringslimiet),
+      },
     );
-  }, [concept, conceptFactuur, facturen]);
+  }, [concept, conceptFactuur, facturen, gebruikers]);
+
+  const voerActieUit = async (factuur: Factuur, actie: MogelijkeActie) => {
+    let reden: string | undefined;
+    if (actie.vraagtReden) {
+      const invoer = window.prompt(`Reden van afkeuren (verplicht) voor ${factuur.factuurnummer ?? "deze factuur"}:`);
+      if (invoer === null) return;
+      if (!invoer.trim()) {
+        setFoutmelding("Afkeuren kan alleen met een reden.");
+        return;
+      }
+      reden = invoer.trim();
+    }
+    setFoutmelding(null);
+    setMelding(null);
+    setBezigId(factuur.id);
+    try {
+      const resultaat = await wijzigStatus(factuur.id, actie.naar, reden);
+      const wat = [factuur.leverancier, factuur.factuurnummer].filter(Boolean).join(" – ") || "Factuur";
+      setMelding(`${wat}: status is nu ${STATUS_LABELS[actie.naar].toLowerCase()}.${resultaat ? ` ${resultaat}.` : ""}`);
+      await vernieuw();
+    } catch (err) {
+      setFoutmelding(foutTekst(err, "De status kon niet worden gewijzigd."));
+    } finally {
+      setBezigId(null);
+    }
+  };
 
   const losSignaalOpEnVernieuw = async (signaalId: string, toelichting: string, ibanOvernemen: boolean) => {
     await losSignaalOp(signaalId, toelichting, ibanOvernemen);
@@ -182,7 +239,7 @@ export default function FacturenPagina({ sessie, lidmaatschap, rekeningen, gebru
         bestandsnaam: bestand.name,
         bestandPad: pad,
         aiModel,
-        status: "gecontroleerd",
+        status: "gescand",
         origineleLeverancier: null,
         data,
         codering: kiesCoderingsvoorstel(historie, aiVoorstel ?? null, rekeningen),
@@ -268,7 +325,6 @@ export default function FacturenPagina({ sessie, lidmaatschap, rekeningen, gebru
         id: concept.factuurId,
         organisatieId,
         data: concept.data,
-        status: concept.status,
         bestandPad: concept.bestandPad,
         bestandsnaam: concept.bestandsnaam,
         aiModel: concept.aiModel,
@@ -331,8 +387,37 @@ export default function FacturenPagina({ sessie, lidmaatschap, rekeningen, gebru
     }
   };
 
+  const conceptStatus = conceptFactuur?.status ?? concept?.status ?? "gescand";
+  const wf = conceptFactuur?.workflow;
+  const statusInfo = wf ? (
+    <>
+      {[
+        wf.ingevoerd_door && `Ingevoerd door ${naamVan(wf.ingevoerd_door) ?? "onbekend"}`,
+        wf.gecontroleerd_door && `gecontroleerd door ${naamVan(wf.gecontroleerd_door) ?? "onbekend"} op ${datum(wf.gecontroleerd_op)}`,
+        wf.goedgekeurd_door && `goedgekeurd door ${naamVan(wf.goedgekeurd_door) ?? "onbekend"} op ${datum(wf.goedgekeurd_op)}`,
+        wf.betaald_op && `betaald op ${datum(wf.betaald_op)}`,
+      ]
+        .filter(Boolean)
+        .join(" · ")}
+      {conceptStatus === "afgekeurd" && wf.afkeur_reden && (
+        <div className="text-red-600">Afgekeurd: {wf.afkeur_reden}</div>
+      )}
+    </>
+  ) : undefined;
+  const terugvalWaarschuwing =
+    concept && conceptFactuur && valtTerugNaGewijzigd(conceptFactuur.status, conceptFactuur, concept.data)
+      ? `Let op: na opslaan gaat de status terug van ${STATUS_LABELS[conceptFactuur.status].toLowerCase()} naar gescand. De factuur moet dan opnieuw worden gecontroleerd en goedgekeurd.`
+      : null;
+
   return (
     <>
+      {leden.length === 1 && (
+        <div className="rounded-md border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
+          {FUNCTIESCHEIDING_MELDING}. Je kunt alle stappen zelf uitvoeren; dit wordt vastgelegd in de historie. Voeg
+          collega's toe via Leden om taken te scheiden.
+        </div>
+      )}
+
       <UploadZone onFile={verwerkBestand} bezig={bezig} />
 
       {foutmelding && (
@@ -355,8 +440,10 @@ export default function FacturenPagina({ sessie, lidmaatschap, rekeningen, gebru
           aiModel={concept.aiModel ?? undefined}
           onBekijkOrigineel={concept.bestandPad ? () => bekijkOrigineel(concept.bestandPad!) : undefined}
           onChange={(data) => setConcept((huidig) => (huidig ? { ...huidig, data } : huidig))}
-          status={concept.status}
-          onStatusChange={(status) => setConcept((huidig) => (huidig ? { ...huidig, status } : huidig))}
+          status={conceptStatus}
+          statusInfo={statusInfo}
+          waarschuwing={terugvalWaarschuwing}
+          alleenLezen={conceptStatus === "betaald"}
           onOpslaan={slaConceptOp}
           onAnnuleren={annuleerConcept}
           opslaan={opslaan}
@@ -364,6 +451,7 @@ export default function FacturenPagina({ sessie, lidmaatschap, rekeningen, gebru
           <CoderingVeld
             codering={concept.codering}
             rekeningen={rekeningen}
+            disabled={conceptStatus === "betaald"}
             onChange={(codering) => setConcept((huidig) => (huidig ? { ...huidig, codering } : huidig))}
           />
           <SignalenBlok
@@ -411,6 +499,9 @@ export default function FacturenPagina({ sessie, lidmaatschap, rekeningen, gebru
 
       <FacturenTabel
         facturen={facturen}
+        context={context}
+        onActie={voerActieUit}
+        bezigId={bezigId}
         laden={laden}
         exporteren={exporteren}
         onBewerken={bewerkRij}

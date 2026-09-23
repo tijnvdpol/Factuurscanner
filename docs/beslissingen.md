@@ -153,3 +153,55 @@ Per keuze: **wat** er gekozen is, **waarom**, en welk **alternatief** is afgewog
 
 ### B33. `org_gebruikers(org)` voor namen
 - Geeft e-mailadressen van leden en van oud-leden die nog in de data voorkomen, alleen aan leden. Gebruikt voor "opgelost door", ledenbeheer en (fase 3.3) de historie.
+
+## Fase 3.2: statusworkflow en functiescheiding
+
+### B34. Status blokkeren via kolomrechten + trigger, wijzigen alleen via `wijzig_status`
+- **Wat:**
+  - `authenticated` heeft geen UPDATE-recht meer op `status` en de workflowkolommen.
+  - Trigger `facturen_bewaking`: bij INSERT door een gebruiker wordt de status altijd `gescand`; bij UPDATE volgt een fout als status/workflowkolommen toch wijzigen.
+  - `public.wijzig_status` (security definer) controleert de overgang, de rol, de functiescheiding, de limiet, open kritieke signalen en of er een grootboekrekening is.
+- **"Bevoegd"** = `current_user` is niet `authenticated`/`anon`: security-definerfuncties, service role en SQL Editor.
+- **Waarom beide:** kolomrechten zijn de harde grens. De trigger vangt ook INSERT af (bij INSERT zijn kolomrechten op status lastig zonder de RPC te breken) en regelt de automatische terugval.
+
+### B35. Wie mag welke overgang
+| Overgang | Rollen |
+|---|---|
+| gescand → gecontroleerd | invoerder, controller, beheerder |
+| gecontroleerd → goedgekeurd | goedkeurder, controller, beheerder (+ voorwaarden) |
+| goedgekeurd → betaald | controller, beheerder |
+| gescand/gecontroleerd → afgekeurd | goedkeurder, controller, beheerder (reden verplicht) |
+| afgekeurd → gescand | invoerder, controller, beheerder |
+
+- **Waarom:** de opdracht noemt de rollen voor controleren, goedkeuren en betalen. Afkeuren is een beoordeling, dus die ligt bij wie mag goedkeuren. Terugzetten na correctie ligt bij wie mag invoeren en controleren.
+
+### B36. Eén lid: alles mag, maar limiet en inhoudelijke blokkades blijven
+- **Wat:** in een organisatie met één lid vervallen de rolcontrole en de functiescheiding. `wijzig_status` geeft de melding "Functiescheiding niet mogelijk: organisatie heeft één lid" terug, die in de audit-toelichting komt. De UI toont een blauwe balk.
+- **Blijft wel gelden:** de eigen goedkeuringslimiet (die de beheerder zelf kan leegmaken), open kritieke signalen en de verplichte grootboekrekening.
+- **Waarom:** die laatste zijn geen functiescheiding maar inhoudelijke controles.
+
+### B37. Terugval naar "gescand"
+- **Wat:** wijzigt bij status gecontroleerd/goedgekeurd een van leverancier, valuta, bedrag excl., totaal incl. of IBAN, of een btw-regel, dan gaat de status naar `gescand` en worden de gecontroleerd/goedgekeurd-velden gewist.
+  - Voor btw-regels gebeurt dat via een trigger op `btw_regels`, dus ook bij rechtstreekse inserts. Cascade-deletes worden overgeslagen via `pg_trigger_depth() > 1`.
+- **Valuta:** hoort er ook bij, want die verandert de betekenis van het bedrag.
+- **Andere velden** (factuurnummer, datums, codering) laten de status staan.
+- De UI waarschuwt vóór het opslaan ("na opslaan gaat de status terug…").
+
+### B38. Betaald = afgesloten
+- **Wat:** inhoudelijke wijzigingen en wijzigingen aan btw-regels van een betaalde factuur worden geweigerd. In de UI wordt het formulier alleen-lezen ("Bekijken").
+- **Waarom:** anders klopt de administratie niet meer met de betaling. De opdracht noemt het niet expliciet.
+
+### B39. Verwijderen
+- De beheerder mag altijd verwijderen. Anderen alleen hun eigen factuur zolang die `gescand` of `afgekeurd` is. De audit trail (3.3) legt het verwijderen vast.
+
+### B40. Goedkeuren boven de limiet bij een ontbrekend totaal
+- Heeft de goedkeurder een limiet en ontbreekt het totaal, dan is goedkeuren geblokkeerd ("Totaalbedrag ontbreekt").
+
+### B41. `net_onder_limiet`
+- Waarschuwing als `totaal_incl` tussen 95% en 100% van een limiet ligt. Het gaat om limieten van leden met een goedkeurrol, en de laagste geraakte limiet telt. Het signaal wordt bij opslaan bepaald en niet opnieuw berekend als een limiet later verandert (bekende beperking).
+
+### B42. UI
+- Tabs "Te controleren" (gescand), "Te keuren" (gecontroleerd), "Te betalen" (goedgekeurd), "Afgekeurd" en "Alles", met aantallen.
+- Per factuur alleen de knoppen die bij de rol en status passen (`mogelijkeActies`, pure functie). Een geblokkeerde goedkeuring staat grijs met de reden eronder, bijv. "Boven je goedkeuringslimiet van € 5.000".
+- Afkeuren vraagt de reden via `window.prompt`. Dat past bij het bestaande `window.confirm`-patroon.
+- De kolommen "Excl. BTW" en "Valuta" zijn uit de tabel gehaald om ruimte te maken voor de acties. Een afwijkende valuta staat bij het totaal, en beide velden blijven in de CSV.

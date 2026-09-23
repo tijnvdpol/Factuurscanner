@@ -24,6 +24,7 @@ const SELECT = `
   id, leverancier_naam, factuurnummer, factuurdatum, vervaldatum, valuta, bedrag_excl, totaal_incl,
   status, bestand_pad, bestandsnaam, ai_model, created_at, iban, btw_nummer, kvk_nummer,
   grootboekrekening_id, codering_bron, codering_zekerheid,
+  user_id, gecontroleerd_door, gecontroleerd_op, goedgekeurd_door, goedgekeurd_op, betaald_op, afkeur_reden,
   leverancier:leveranciers ( iban ),
   btw_regels ( volgorde, tarief, grondslag, btw_bedrag ),
   signalen:factuur_signalen (
@@ -51,6 +52,13 @@ interface FactuurRij {
   grootboekrekening_id: string | null;
   codering_bron: CoderingBron | null;
   codering_zekerheid: number | string | null;
+  user_id: string | null;
+  gecontroleerd_door: string | null;
+  gecontroleerd_op: string | null;
+  goedgekeurd_door: string | null;
+  goedgekeurd_op: string | null;
+  betaald_op: string | null;
+  afkeur_reden: string | null;
   leverancier: { iban: string | null } | null;
   btw_regels: {
     volgorde: number;
@@ -93,6 +101,15 @@ function naarFactuur(rij: FactuurRij): Factuur {
     status: rij.status,
     ai_model: rij.ai_model,
     aangemaaktOp: rij.created_at,
+    workflow: {
+      ingevoerd_door: rij.user_id,
+      gecontroleerd_door: rij.gecontroleerd_door,
+      gecontroleerd_op: rij.gecontroleerd_op,
+      goedgekeurd_door: rij.goedgekeurd_door,
+      goedgekeurd_op: rij.goedgekeurd_op,
+      betaald_op: rij.betaald_op,
+      afkeur_reden: rij.afkeur_reden,
+    },
   };
 }
 
@@ -158,7 +175,6 @@ interface OpslaanInvoer {
   id: string;
   organisatieId: string;
   data: FactuurData;
-  status: FactuurStatus;
   bestandPad: string | null;
   bestandsnaam: string | null;
   aiModel: string | null;
@@ -174,7 +190,6 @@ export async function slaFactuurOp(invoer: OpslaanInvoer): Promise<string> {
       ...invoer.data,
       id: invoer.id,
       organisatie_id: invoer.organisatieId,
-      status: invoer.status,
       bestand_pad: invoer.bestandPad,
       bestandsnaam: invoer.bestandsnaam,
       ai_model: invoer.aiModel,
@@ -226,7 +241,6 @@ export async function importeerLokaleFacturen(
         id: eigenBestand ? factuur.id : crypto.randomUUID(),
         organisatieId,
         data,
-        status: "gecontroleerd",
         bestandPad: eigenBestand ? factuur.bestand_pad : null,
         bestandsnaam,
         aiModel: ai_model,
@@ -250,4 +264,18 @@ export async function losSignaalOp(signaalId: string, toelichting: string, ibanO
     p_iban_overnemen: ibanOvernemen,
   });
   if (error) throw vertaalFout(error);
+}
+
+/**
+ * Wijzigt de status via de databasefunctie wijzig_status (die rol, functiescheiding, limiet en
+ * blokkades controleert). Geeft een eventuele melding terug, bijv. over functiescheiding bij één lid.
+ */
+export async function wijzigStatus(factuurId: string, nieuweStatus: FactuurStatus, toelichting?: string): Promise<string | null> {
+  const { data, error } = await supabase.rpc("wijzig_status", {
+    p_factuur_id: factuurId,
+    p_nieuwe_status: nieuweStatus,
+    p_toelichting: toelichting ?? null,
+  });
+  if (error) throw vertaalFout(error);
+  return (data as string | null) ?? null;
 }

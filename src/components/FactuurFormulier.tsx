@@ -1,4 +1,4 @@
-import { STATUSSEN, STATUS_LABELS, type FactuurData, type FactuurStatus, type VeldFouten } from "../types";
+import { STATUS_LABELS, type FactuurData, type FactuurStatus, type VeldFouten } from "../types";
 import NummerInput from "./NummerInput";
 
 interface Props {
@@ -6,7 +6,12 @@ interface Props {
   fouten: VeldFouten;
   onChange: (bijgewerkt: FactuurData) => void;
   status: FactuurStatus;
-  onStatusChange: (status: FactuurStatus) => void;
+  /** Wie deed wat (ingevoerd, gecontroleerd, …), onder de status getoond. */
+  statusInfo?: React.ReactNode;
+  /** Melding boven de knoppen, bijv. dat opslaan de status terugzet naar gescand. */
+  waarschuwing?: string | null;
+  /** Betaalde facturen: velden vergrendeld, geen opslaan. */
+  alleenLezen?: boolean;
   onOpslaan: () => void;
   onAnnuleren: () => void;
   bestandsnaam?: string;
@@ -37,7 +42,9 @@ export default function FactuurFormulier({
   fouten,
   onChange,
   status,
-  onStatusChange,
+  statusInfo,
+  waarschuwing,
+  alleenLezen = false,
   onOpslaan,
   onAnnuleren,
   bestandsnaam,
@@ -76,7 +83,7 @@ export default function FactuurFormulier({
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold text-slate-800">
-            {bewerken ? "Factuur bewerken" : "Controleer gescande gegevens"}
+            {alleenLezen ? "Factuur bekijken" : bewerken ? "Factuur bewerken" : "Controleer gescande gegevens"}
           </h2>
           {aiModel && <p className="text-xs text-slate-400">Herkend door {aiModel}</p>}
         </div>
@@ -94,6 +101,13 @@ export default function FactuurFormulier({
         </div>
       </div>
 
+      {alleenLezen && (
+        <p className="mb-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+          Deze factuur is betaald en kan niet meer worden gewijzigd.
+        </p>
+      )}
+
+      <fieldset disabled={alleenLezen} className="min-w-0">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
           <Label ontbreekt={!factuur.leverancier}>Leverancier</Label>
@@ -263,24 +277,22 @@ export default function FactuurFormulier({
           ))}
         </div>
       </div>
+      </fieldset>
 
       {children}
 
+      {waarschuwing && !alleenLezen && (
+        <p className="mt-5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{waarschuwing}</p>
+      )}
+
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
-        <label className="flex items-center gap-2 text-xs font-medium text-slate-600">
-          Status
-          <select
-            value={status}
-            onChange={(e) => onStatusChange(e.target.value as FactuurStatus)}
-            className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-800/20"
-          >
-            {STATUSSEN.map((s) => (
-              <option key={s} value={s}>
-                {STATUS_LABELS[s]}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="text-xs text-slate-600">
+          <span className="font-medium">Status:</span>{" "}
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 font-medium text-slate-700">
+            {bewerken ? STATUS_LABELS[status] : "Nieuw (wordt Gescand)"}
+          </span>
+          {statusInfo && <div className="mt-1 text-slate-400">{statusInfo}</div>}
+        </div>
 
         <div className="flex gap-2">
           <button
@@ -289,8 +301,9 @@ export default function FactuurFormulier({
             disabled={opslaan}
             className="rounded-md px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-300"
           >
-            Annuleren
+            {alleenLezen ? "Sluiten" : "Annuleren"}
           </button>
+          {!alleenLezen && (
           <button
             type="button"
             onClick={onOpslaan}
@@ -299,6 +312,7 @@ export default function FactuurFormulier({
           >
             {opslaan ? "Opslaan…" : bewerken ? "Wijzigingen opslaan" : "Toevoegen aan overzicht"}
           </button>
+          )}
         </div>
       </div>
     </div>

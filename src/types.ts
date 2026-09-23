@@ -18,7 +18,7 @@ export interface FactuurData {
   kvk_nummer: string | null;
 }
 
-export const STATUSSEN = ["gescand", "gecontroleerd", "goedgekeurd", "betaald"] as const;
+export const STATUSSEN = ["gescand", "gecontroleerd", "goedgekeurd", "betaald", "afgekeurd"] as const;
 export type FactuurStatus = (typeof STATUSSEN)[number];
 
 export const STATUS_LABELS: Record<FactuurStatus, string> = {
@@ -26,6 +26,7 @@ export const STATUS_LABELS: Record<FactuurStatus, string> = {
   gecontroleerd: "Gecontroleerd",
   goedgekeurd: "Goedgekeurd",
   betaald: "Betaald",
+  afgekeurd: "Afgekeurd",
 };
 
 export const SIGNAAL_TYPES = [
@@ -83,7 +84,29 @@ export interface Factuur extends FactuurData {
   status: FactuurStatus;
   ai_model: string | null;
   aangemaaktOp: string;
+  workflow: Workflow;
 }
+
+/** Wie deed wat in de statusworkflow (user-id's en tijdstippen). */
+export interface Workflow {
+  ingevoerd_door: string | null;
+  gecontroleerd_door: string | null;
+  gecontroleerd_op: string | null;
+  goedgekeurd_door: string | null;
+  goedgekeurd_op: string | null;
+  betaald_op: string | null;
+  afkeur_reden: string | null;
+}
+
+export const LEGE_WORKFLOW: Workflow = {
+  ingevoerd_door: null,
+  gecontroleerd_door: null,
+  gecontroleerd_op: null,
+  goedgekeurd_door: null,
+  goedgekeurd_op: null,
+  betaald_op: null,
+  afkeur_reden: null,
+};
 
 export type VeldFouten = Record<string, string>;
 

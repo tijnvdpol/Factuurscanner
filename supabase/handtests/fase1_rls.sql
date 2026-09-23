@@ -77,15 +77,18 @@ begin
   select iban into v_tekst from public.leveranciers where id = v_lev_a;
   if v_tekst <> 'NL91ABNA0417164300' then raise exception 'FOUT 7b: IBAN onterecht overschreven bij bewerken'; end if;
 
-  -- 8. Bewerken vervangt btw-regels en behoudt status
+  -- 8. Bewerken vervangt btw-regels. Sinds stap 3 zet een gewijzigde btw-regel een goedgekeurde
+  --    factuur terug naar gescand (status zetten kan alleen via wijzig_status; hier als beheerder).
+  perform set_config('role', 'postgres', true);
   update public.facturen set status = 'goedgekeurd' where id = v_f1;
+  perform set_config('role', 'authenticated', true);
   perform public.sla_factuur_op(jsonb_build_object(
     'id', v_f1, 'leverancier', 'Bol.com', 'factuurnummer', 'F-001',
     'btw_regels', jsonb_build_array(jsonb_build_object('tarief', 21, 'grondslag', 100, 'btw_bedrag', 21))));
   select count(*) into v_n from public.btw_regels where factuur_id = v_f1;
   if v_n <> 1 then raise exception 'FOUT 8a: verwacht 1 btw-regel na bewerken, kreeg %', v_n; end if;
   select status into v_tekst from public.facturen where id = v_f1;
-  if v_tekst <> 'goedgekeurd' then raise exception 'FOUT 8b: status onterecht gewijzigd naar %', v_tekst; end if;
+  if v_tekst <> 'gescand' then raise exception 'FOUT 8b: status niet teruggezet naar gescand maar %', v_tekst; end if;
 
   -- 9. updated_at-trigger (sinds stap 3 mogen gebruikers updated_at niet zelf zetten; als beheerder testen)
   perform set_config('role', 'postgres', true);
@@ -94,11 +97,11 @@ begin
   select updated_at into v_ts from public.facturen where id = v_f1;
   if v_ts < now() - interval '1 minute' then raise exception 'FOUT 9: updated_at-trigger werkt niet'; end if;
 
-  -- 10. Ongeldige status en valuta worden geweigerd
+  -- 10. Ongeldige status en valuta worden geweigerd (status rechtstreeks zetten mag sinds stap 3 niet eens)
   v_ok := false;
   begin
     update public.facturen set status = 'onzin' where id = v_f1;
-  exception when check_violation then v_ok := true;
+  exception when check_violation or insufficient_privilege then v_ok := true;
   end;
   if not v_ok then raise exception 'FOUT 10a: ongeldige status geaccepteerd'; end if;
   v_ok := false;
@@ -118,7 +121,7 @@ begin
   if v_n <> 0 then raise exception 'FOUT 11: gebruiker B ziet % rijen van A', v_n; end if;
 
   -- 12. B kan A's factuur niet wijzigen of verwijderen
-  update public.facturen set status = 'betaald' where id = v_f1;
+  update public.facturen set factuurnummer = 'GEHACKT' where id = v_f1;
   get diagnostics v_n = row_count;
   if v_n <> 0 then raise exception 'FOUT 12a: B kon factuur van A wijzigen'; end if;
   delete from public.facturen where id = v_f1;

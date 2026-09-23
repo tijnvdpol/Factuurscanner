@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { genereerCsv } from "./csv";
-import { GEEN_CODERING, legeFactuurData, type Factuur } from "../types";
+import { GEEN_CODERING, LEGE_WORKFLOW, legeFactuurData, type Factuur } from "../types";
 
 function factuur(extra: Partial<Factuur>): Factuur {
   return {
@@ -16,6 +16,7 @@ function factuur(extra: Partial<Factuur>): Factuur {
     status: "gescand",
     ai_model: null,
     aangemaaktOp: "2026-09-01T10:00:00Z",
+    workflow: LEGE_WORKFLOW,
     ...extra,
   };
 }
