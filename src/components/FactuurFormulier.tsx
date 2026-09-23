@@ -190,9 +190,10 @@ export default function FactuurFormulier({
               type="text"
               value={factuur.btw_nummer ?? ""}
               onChange={(e) => zet("btw_nummer", e.target.value || null)}
-              className={inputKlasse()}
+              className={inputKlasse(fouten["btw_nummer"])}
               placeholder="—"
             />
+            {fouten["btw_nummer"] && <p className="mt-1 text-xs text-red-600">{fouten["btw_nummer"]}</p>}
           </div>
 
           <div>
@@ -201,9 +202,10 @@ export default function FactuurFormulier({
               type="text"
               value={factuur.kvk_nummer ?? ""}
               onChange={(e) => zet("kvk_nummer", e.target.value || null)}
-              className={inputKlasse()}
+              className={inputKlasse(fouten["kvk_nummer"])}
               placeholder="—"
             />
+            {fouten["kvk_nummer"] && <p className="mt-1 text-xs text-red-600">{fouten["kvk_nummer"]}</p>}
           </div>
         </div>
       </div>
