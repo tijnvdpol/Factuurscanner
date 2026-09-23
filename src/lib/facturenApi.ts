@@ -20,14 +20,15 @@ export class DbError extends Error {
   }
 }
 
+// Expliciete foreign-key-hints (!naam): sinds de organisaties zijn er meerdere routes tussen tabellen.
 const SELECT = `
   id, leverancier_naam, factuurnummer, factuurdatum, vervaldatum, valuta, bedrag_excl, totaal_incl,
   status, bestand_pad, bestandsnaam, ai_model, created_at, iban, btw_nummer, kvk_nummer,
   grootboekrekening_id, codering_bron, codering_zekerheid,
   user_id, gecontroleerd_door, gecontroleerd_op, goedgekeurd_door, goedgekeurd_op, betaald_op, afkeur_reden,
-  leverancier:leveranciers ( iban ),
-  btw_regels ( volgorde, tarief, grondslag, btw_bedrag ),
-  signalen:factuur_signalen (
+  leverancier:leveranciers!facturen_leverancier_fk ( iban ),
+  btw_regels!btw_regels_factuur_id_fkey ( volgorde, tarief, grondslag, btw_bedrag ),
+  signalen:factuur_signalen!factuur_signalen_factuur_id_fkey (
     id, factuur_id, type, ernst, bericht, details, opgelost, opgelost_door, opgelost_op, toelichting, created_at
   )
 `;

@@ -13,7 +13,7 @@ interface LidmaatschapRij {
 export async function haalLidmaatschappenOp(userId: string): Promise<Lidmaatschap[]> {
   const { data, error } = await supabase
     .from("organisatie_leden")
-    .select("organisatie_id, rol, goedkeuringslimiet, created_at, organisatie:organisaties ( naam )")
+    .select("organisatie_id, rol, goedkeuringslimiet, created_at, organisatie:organisaties!organisatie_leden_organisatie_id_fkey ( naam )")
     .eq("user_id", userId)
     .order("created_at");
   if (error) throw vertaalFout(error);
