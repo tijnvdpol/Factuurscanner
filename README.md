@@ -23,9 +23,10 @@ met rollen, een goedkeuringsworkflow met functiescheiding, een audit trail en ko
 | `supabase/functions/verwerk-taken/` | Worker voor de takenwachtrij van de koppelingen (aangeroepen door pg_cron) |
 | `supabase/functions/koppeling-actie/` | Acties op koppelingen vanuit de app (overzicht, wachtrij testen, testmail, …) |
 | `supabase/functions/inbound-mail/` | Webhook voor inkomende mail (Mailgun) |
+| `supabase/functions/mail-actie/` | Knoppen Goedkeuren/Afkeuren uit een goedkeuringsmail (ondertekend, eenmalig token) |
 | `supabase/functions/_shared/geminiScan.ts` | Gemini-scan met modelkeuze en fallback (gedeeld door scan-factuur en de mailbox) |
 | `supabase/functions/_shared/koppelingen/` | Gedeelde, testbare logica van de koppelingen (modus, taken, adapters) |
-| `supabase/handtests/` | Testscripts voor de SQL Editor (`fase1_rls.sql`, `fase2_3_workflow.sql`, `fase4_1_koppelingen.sql`) |
+| `supabase/handtests/` | Testscripts voor de SQL Editor (`fase1_rls.sql`, `fase2_3_workflow.sql`, `fase4_1_koppelingen.sql` t/m `fase4_4_notificaties.sql`) |
 | `supabase/tests/` | Geautomatiseerde databasetests (Vitest + PGlite, geen Docker nodig) |
 | `src/lib/veldvalidatie.ts`, `signalen.ts`, `workflow.ts`, `codering.ts`, `audit.ts` | Pure functies (validatie, signaalregels, statusregels, coderingsvoorstel, leesbare audit log) |
 | `docs/beslissingen.md` | Ontwerpbeslissingen (stap 2 en 3, koppelingen) |
@@ -114,7 +115,7 @@ pagina Koppelingen laat zien welke secrets voor live nog ontbreken (alleen de na
 | Verrijken: ECB-wisselkoersen | `ECB` | niets (gratis API) | fase 4.2 ✅ |
 | Verrijken: KvK | `KVK` | `KVK_API_KEY` (productie), of `KVK_OMGEVING=test` zonder sleutel | fase 4.2 ✅ |
 | Mailbox-import | `MAILBOX` | Mailgun-account (gratis plan) + eigen (sub)domein + `MAILGUN_SIGNING_KEY` | fase 4.3 ✅ |
-| E-mailnotificaties | `EMAIL` | Resend-account + `RESEND_API_KEY`, `MAIL_AFZENDER`, `APP_URL` | fase 4.4 |
+| E-mailnotificaties | `EMAIL` | Resend-account (gratis plan) + eigen domein + `RESEND_API_KEY`, `MAIL_AFZENDER`, `APP_URL` | fase 4.4 ✅ |
 | Boekhoudpakket | `BOEKHOUDING` | Moneybird + `MONEYBIRD_TOKEN`, `MONEYBIRD_ADMINISTRATIE_ID` | fase 4.5 |
 | Betaalopdrachten | `BETALING` | niets (live = SEPA-bestand downloaden) | fase 4.6 |
 | Power BI | – | Power BI Desktop + een rapportagerol | fase 4.7 |
@@ -236,6 +237,66 @@ Stel eerst een ontvangstadres in (in mock-modus mag dat elk adres zijn).
 Webhook-beveiliging: elke aanroep moet een geldige Mailgun-handtekening hebben (HMAC-SHA256 met de signing key, maximaal
 12 uur oud: Mailgun probeert tot 8 uur opnieuw). Dezelfde mail (Message-Id) wordt nooit twee keer verwerkt.
 
+### E-mailnotificaties (fase 4.4)
+
+Wie wanneer een mail krijgt:
+
+| Mail | Wanneer | Aan |
+|---|---|---|
+| **Goedkeuringsverzoek** met knoppen *Goedkeuren* en *Afkeuren* | een factuur wordt gecontroleerd | elk lid dat hem mag goedkeuren: rol goedkeurder, controller of beheerder, bedrag in euro binnen de limiet, niet de invoerder of controleur. Bij vreemde valuta krijgen leden met een limiet de mail zodra de koers bekend is. |
+| **Afgekeurd** | een factuur wordt afgekeurd | invoerder en controleur (niet wie afkeurde); zijn die er niet, dan de controllers en beheerders |
+| **Export mislukt** | een export naar het boekhoudpakket is na alle pogingen opgegeven (fase 4.5) | controllers en beheerders |
+| **Bijna vervallen** | dagelijks om 08:00: openstaande facturen die binnen 3 dagen vervallen (instelbaar) | controllers en beheerders; één mail per persoon, elke factuur één keer |
+
+**Goedkeuren vanuit de mail:** de knop opent de app (`APP_URL/#mail-actie=…`) met de factuurgegevens en een knop
+*Bevestig goedkeuren* (bij afkeuren met een verplichte reden). Inloggen is niet nodig. De link:
+
+- bevat een door de server **ondertekend token** (HMAC-SHA256) met een **verlooptijd** (standaard 72 uur, instelbaar);
+- werkt **één keer**, voor goedkeuren óf afkeuren, en vervalt als de factuur intussen is gewijzigd en opnieuw gecontroleerd;
+- doorloopt op de server **dezelfde controles als de app**: rol, goedkeuringslimiet in euro, open kritieke signalen en
+  grootboekrekening. Daarnaast geldt een **strikte functiescheiding**: nooit goedkeuren wat je zelf hebt ingevoerd of
+  gecontroleerd, ook niet in een organisatie met één lid (daar gaan dus geen goedkeuringsmails uit).
+
+In de audit log staat de statuswijziging met de goedkeurder als gebruiker en bron *E-mail*. Een geweigerde poging (bijv.
+"boven je limiet") staat er ook, en verbruikt de link niet. Elke verstuurde mail staat in de historie van de factuur. Een
+mail die niet meer nodig is (factuur al goedgekeurd), wordt niet verstuurd (status *Niet nodig*).
+
+**Mock-modus** (standaard): er gaat niets de deur uit. Elke gebruiker leest zijn eigen mails onder **Meldingen → Mijn mails**,
+met werkende knoppen (ze openen de bevestigingspagina in een nieuw tabblad). Controllers en beheerders zien onder *Alle mails*
+wie wat heeft gekregen, maar niet de inhoud: anders zou een invoerder met de knoppen van een goedkeurder kunnen goedkeuren.
+Fouten testen: een ontvanger met `+tijdelijk` in het adres geeft een tijdelijke fout (nieuwe pogingen), met `+ongeldig` een
+definitieve fout ("Mail niet verzonden" bij de factuur).
+
+**Live instellen (Resend, gratis plan: 3.000 mails per maand, 100 per dag, 1 domein):**
+
+1. Account maken op resend.com.
+2. **Domein toevoegen** (Domains → Add domain), bij voorkeur een subdomein, bijv. `mail.jouwbedrijf.nl`, regio *eu-west-1*.
+   Zet de DNS-records die Resend toont (SPF/MX en DKIM) en wacht tot het domein *Verified* is. Zonder geverifieerd domein
+   kun je alleen mailen naar het adres van je eigen Resend-account.
+3. **API-sleutel** maken (API Keys → Create, permission *Sending access*, alleen dit domein).
+4. **Supabase secrets** (Edge Functions → Secrets):
+   - `RESEND_API_KEY` = de sleutel uit stap 3
+   - `MAIL_AFZENDER` = bijv. `Factuurscanner <facturen@mail.jouwbedrijf.nl>` (het domein uit stap 2)
+   - `APP_URL` = de URL van de app op Vercel, bijv. `https://factuurscanner.vercel.app` (voor de links in de mail)
+   - optioneel `MAIL_TOKEN_GEHEIM` = een eigen geheim voor de links (maak het zoals `WORKER_GEHEIM`). Zonder dit secret
+     wordt een sleutel afgeleid van de service-rolsleutel; open links vervallen dan als die sleutel ooit wordt vervangen.
+5. **Migratie** `20260924130000_notificaties.sql` uitvoeren. Die plant ook de dagelijkse cronjob
+   `factuurscanner-vervalherinneringen`.
+6. **Deployen** (commando's één voor één):
+   ```powershell
+   npx.cmd supabase functions deploy mail-actie --use-api --project-ref <project-ref>
+   npx.cmd supabase functions deploy verwerk-taken --use-api --project-ref <project-ref>
+   npx.cmd supabase functions deploy koppeling-actie --use-api --project-ref <project-ref>
+   ```
+   De frontend (nieuwe pagina *Meldingen* en de bevestigingspagina) komt mee met een nieuwe deploy op Vercel; er zijn geen
+   nieuwe Vercel-variabelen nodig.
+7. Zet **Koppelingen → E-mailnotificaties** op *Live* (of secret `KOPPELING_EMAIL_MODUS=live`) en klik op
+   **Stuur een testmail naar mezelf**. Op dezelfde pagina stel je in hoeveel dagen vóór de vervaldatum de herinnering komt
+   en hoe lang de knoppen geldig zijn.
+8. **Controleren:** draai `supabase/handtests/fase4_4_notificaties.sql` (verwacht: `GESLAAGD: alle 9 tests ok`). Blijft een
+   mail op *In wachtrij* staan of mislukt hij, kijk dan bij Koppelingen → Wachtrij (de foutmelding van Resend staat erbij)
+   en in Resend → Logs.
+
 ## Beveiliging
 
 - Elke tabel heeft RLS op lidmaatschap van de organisatie (`is_lid`/`heeft_rol`). `btw_regels` wordt beveiligd via de bijbehorende factuur.
@@ -247,3 +308,6 @@ Webhook-beveiliging: elke aanroep moet een geldige Mailgun-handtekening hebben (
 - Koppelingen: Edge Functions met de service-rolsleutel wijzigen facturen alleen via databasefuncties die dezelfde controles
   doen als de app. De service role kan de status niet rechtstreeks wijzigen (trigger). De worker is alleen aan te roepen met
   `WORKER_GEHEIM`; de takenwachtrij is voor gebruikers alleen-lezen.
+- Mail-links: ondertekend token met verlooptijd, eenmalig; de server controleert rol, limiet en functiescheiding opnieuw.
+  Bevestigen gebeurt altijd op een pagina, dus een link-scanner van een mailprogramma voert niets uit. De inhoud van
+  mock-mails is alleen leesbaar voor de ontvanger; van echte mails wordt de inhoud niet bewaard.

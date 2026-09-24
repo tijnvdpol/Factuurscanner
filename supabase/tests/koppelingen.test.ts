@@ -335,6 +335,8 @@ describe("takenwachtrij", () => {
     );
     expect(status).toEqual([
       { soort: "boekhouding", status: "gelukt" },
+      // Sinds fase 4.4: mail over de opgegeven export (en eerder het goedkeuringsverzoek)
+      { soort: "email", status: "wachtrij" },
       { soort: "kvk", status: "gelukt" },
       { soort: "vies", status: "opgegeven" },
     ]);

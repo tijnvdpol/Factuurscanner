@@ -17,3 +17,7 @@ verify_jwt = false
 # Mailgun roept deze aan; de functie controleert de Mailgun-handtekening zelf.
 [functions.inbound-mail]
 verify_jwt = false
+
+# Knoppen in de goedkeuringsmail (via de app, zonder inloggen); de functie controleert het ondertekende token.
+[functions.mail-actie]
+verify_jwt = false

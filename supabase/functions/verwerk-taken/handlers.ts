@@ -8,6 +8,8 @@ import { ViesLive, ViesMock } from "../_shared/koppelingen/vies.ts";
 import { EcbLive, EcbMock } from "../_shared/koppelingen/ecb.ts";
 import { KVK_TEST_SLEUTEL, KVK_URL, KvkLive, KvkMock } from "../_shared/koppelingen/kvk.ts";
 import { type InboxBijlageRij, mailboxHandler, mockScan } from "../_shared/koppelingen/mailbox.ts";
+import { appUrlVoor, emailHandler, MailMock, ResendLive } from "../_shared/koppelingen/email.ts";
+import { mailTokenSleutel } from "../_shared/koppelingen/mailtoken.ts";
 import { mimeTypeVoor, scanMetGemini } from "../_shared/geminiScan.ts";
 import type { Rekening } from "../_shared/gemini.ts";
 
@@ -22,6 +24,15 @@ function kvkLive(): KvkLive {
     throw new DefinitieveFout("KvK staat op live, maar KVK_API_KEY ontbreekt (of zet KVK_OMGEVING=test voor de testomgeving).");
   }
   return new KvkLive(test ? KVK_URL.test : KVK_URL.productie, sleutel);
+}
+
+function resendLive(): ResendLive {
+  const sleutel = Deno.env.get("RESEND_API_KEY")?.trim();
+  const afzender = Deno.env.get("MAIL_AFZENDER")?.trim();
+  if (!sleutel || !afzender) {
+    throw new DefinitieveFout("E-mail staat op live, maar RESEND_API_KEY of MAIL_AFZENDER ontbreekt.");
+  }
+  return new ResendLive(sleutel, afzender);
 }
 
 /** Scannen zonder Gemini: als SCAN_MODUS=mock, of als er geen GEMINI_API_KEY is. */
@@ -101,5 +112,17 @@ export function maakHandlers(supabase: SupabaseClient): Record<string, TaakHandl
     }),
 
     mailbox: mailboxDeps(supabase),
+
+    email: emailHandler({
+      modus: (organisatieId, koppeling) => modusVoor(supabase, organisatieId, koppeling),
+      rpc: async (functie, args) => {
+        const { data, error } = await supabase.rpc(functie, args);
+        if (error) throw new Error(`${functie}: ${error.message}`);
+        return data;
+      },
+      provider: (modus) => (modus === "live" ? resendLive() : new MailMock()),
+      appUrl: (modus) => appUrlVoor(modus, Deno.env.get("APP_URL")),
+      tokenSleutel: () => mailTokenSleutel((naam) => Deno.env.get(naam)),
+    }),
   };
 }

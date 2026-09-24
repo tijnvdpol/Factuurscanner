@@ -443,3 +443,78 @@ betaalbatch of na export inhoudelijk vergrendeld; de knop goedgekeurd → betaal
   zet die de bijlage op *Mislukt* (met de fout) of terug op *Wordt verwerkt*. Latere fasen gebruiken dezelfde haak.
 - **Waarom:** de inbox toont de status per bijlage zonder dat de worker aparte administratie hoeft te doen.
 
+
+## Fase 4.4: e-mailnotificaties
+
+### B74. De database bepaalt wie een mail krijgt; de worker stelt hem op en verstuurt hem
+- **Wat:** triggers (gecontroleerd, koers bekend, afgekeurd), `intern.taak_status_gewijzigd` (export opgegeven) en een
+  dagelijkse cronjob (bijna vervallen) leggen per ontvanger een rij vast in `notificaties` en plannen een `email`-taak. De
+  worker haalt via `notificatie_voor_verzending` de gegevens op, stelt de mail op (`_shared/koppelingen/mailteksten.ts`) en
+  verstuurt hem via Resend of mock.
+- **Waarom:** de ontvangers hangen af van rollen, limieten en functiescheiding; die regels staan al in SQL (B9). Via de
+  wachtrij krijgt versturen retries en een zichtbare status per factuur ("Mail niet verzonden").
+- **Idempotent:** `notificaties` is uniek op (organisatie, soort, sleutel); de sleutel bevat de factuur, het moment (bijv. de
+  controle) en de ontvanger. Resend krijgt de notificatie-id als `Idempotency-Key` (24 uur geldig, langer dan de hele
+  retry-reeks van ongeveer 15 uur), dus een nieuwe poging na een time-out mailt niet dubbel.
+- **Relevantie bij verzenden:** is de factuur intussen goedgekeurd, opnieuw gecontroleerd of verwijderd, of is de ontvanger
+  geen lid meer, dan wordt de mail overgeslagen (status *Niet nodig*, met reden).
+
+### B75. Ontvangers
+- **Goedkeuren:** rol goedkeurder/controller/beheerder, bedrag in euro binnen de limiet (of geen limiet), niet de invoerder en
+  niet de controleur. Bij vreemde valuta zonder koers krijgen alleen leden zonder limiet direct een mail; de rest zodra
+  `verwerk_wisselkoers` het bedrag in euro zet (dezelfde trigger, zelfde sleutel per controleronde, dus geen dubbele mail).
+- **Afgekeurd:** invoerder en controleur, behalve wie afkeurde. Een factuur uit de mail heeft geen invoerder; zonder
+  invoerder en controleur gaat de mail naar controllers en beheerders.
+- **Export mislukt / bijna vervallen:** controllers en beheerders, de rollen die dit kunnen oplossen. Bijna vervallen is één
+  mail per persoon per dag met de facturen die die persoon nog niet eerder gemeld kreeg (standaard 3 dagen vooruit,
+  instelbaar 1–30), zodat een factuur niet dagelijks terugkomt.
+- **Alternatief:** een mail per factuur voor "bijna vervallen". Dat geeft op drukke dagen een reeks losse mails.
+
+### B76. Knoppen openen een bevestigingspagina in de app, niet direct de actie
+- **Wat:** de knoppen linken naar `APP_URL/#mail-actie=<token>&keuze=…`. De pagina toont de factuur (incl. open signalen) en
+  voert pas na *Bevestig* de actie uit via de Edge Function `mail-actie`. Inloggen is niet nodig.
+- **Waarom:** mailprogramma's (bijv. Outlook Safe Links) openen links om ze te scannen; een GET mag dus nooit iets goedkeuren.
+  Een Edge Function kan op Supabase geen HTML-pagina serveren, en de app draait al op Vercel. Het token staat in de
+  `#`-fragment, zodat het niet in serverlogs of in een Referer terechtkomt, en er is geen rewrite-regel op Vercel nodig.
+- **Afkeuren** vraagt op die pagina de verplichte reden (zelfde regel als in de app).
+
+### B77. Token: ondertekend (HMAC) met verlooptijd; eenmalig en gebonden via de database
+- **Wat:** `v1.<payload>.<handtekening>`, met payload `{ id van mail_acties, verlooptijd }` en HMAC-SHA256 met
+  `MAIL_TOKEN_GEHEIM` (of een sleutel afgeleid van de service-rolsleutel). `mail_acties` koppelt het id aan goedkeurder,
+  factuur en het tijdstip van de controle, en legt het gebruik vast. Eén token voor beide knoppen: gebruikt = gebruikt.
+- **Waarom deze vorm:** de opdracht vraagt om een ondertekend, eenmalig token met een verlooptijd. Het token is
+  deterministisch per notificatie (verlooptijd staat in de database), zodat een nieuwe poging van de worker exact dezelfde mail
+  verstuurt en de idempotentie van Resend werkt. Er staan geen persoonsgegevens of bedragen in het token.
+- **Vervalt ook** als de factuur na de mail opnieuw is gecontroleerd (andere `gecontroleerd_op`).
+- **Geweigerde poging** (limiet, signaal, verlopen, al gebruikt): staat in de audit log (bron email, gebruiker = goedkeurder van
+  de link) en verbruikt de link niet; een tijdelijk probleem (bijv. koers volgt) kan dus later alsnog.
+- **Alternatief:** alleen een willekeurig token met een hash in de database. Dat is ook veilig, maar niet "ondertekend" en
+  lastiger idempotent te versturen.
+
+### B78. Via de mail geldt een strikte functiescheiding
+- **Wat:** `voer_mail_actie_uit` weigert goedkeuren door de invoerder of controleur, ook in een organisatie met één lid, en
+  voert daarna `intern.wijzig_status_als(goedkeurder, …, 'email')` uit: dezelfde controles als de app (rol, limiet in euro,
+  open kritieke signalen, grootboekrekening).
+- **Waarom:** de opdracht eist dat de server dit bij een mail-goedkeuring opnieuw controleert. De uitzondering voor één lid
+  (B36) is bedoeld voor wie in de app werkt; een link in een mailbox is makkelijker door te sturen. Een organisatie met één lid
+  krijgt daardoor geen goedkeuringsmails (het enige lid is altijd de controleur).
+- **Vooraf tonen:** `bekijk_mail_actie` voert de statuswijziging als proef uit en draait hem terug (`intern.proef_statuswijziging`),
+  zodat de pagina en de mail de reden al tonen ("Kies eerst een grootboekrekening.") en geen goedkeurknop geven die toch faalt.
+  Zo is er één bron van regels.
+
+### B79. Mock: mails lezen in de app, alleen de eigen mails met inhoud
+- **Wat:** in mock-modus wordt niets verstuurd; de volledige mail staat in `notificatie_inhoud` en is alleen leesbaar voor de
+  ontvanger (pagina *Meldingen → Mijn mails*, in een iframe met sandbox; links openen in een nieuw tabblad). Controllers en
+  beheerders zien bij *Alle mails* wie wat kreeg en de status, maar niet de inhoud. Van live mails wordt de inhoud niet bewaard.
+- **Waarom:** mock staat standaard aan, ook in productie. Als iedereen de mock-mails kon lezen, zou een invoerder met de
+  knoppen van een goedkeurder zijn eigen factuur kunnen goedkeuren.
+- **APP_URL in mock:** mag ontbreken; de mail krijgt dan een placeholder die de app vervangt door zijn eigen adres.
+- **Fouten simuleren:** `+tijdelijk` of `+ongeldig` in het ontvangstadres (zelfde idee als de mock-regels van VIES en KvK).
+
+### B80. Resend: welke fouten opnieuw
+- 429 (limiet per seconde, dag- of maandquotum), 409 `concurrent_idempotent_requests`, 5xx en netwerkfouten → nieuwe poging.
+  409 `invalid_idempotent_request` (zelfde sleutel, iets andere inhoud: de eerdere poging is dus aangekomen) → geldt als
+  verzonden. Andere 4xx (sleutel ongeldig, domein niet geverifieerd, ongeldig adres) → direct opgegeven, met de melding van
+  Resend bij de taak en de notificatie.
+- **Waarom Resend:** gratis plan (3.000/maand, 100/dag) is genoeg voor één organisatie; eenvoudige REST-API met idempotentie.
+  Inkomende mail blijft Mailgun (B66).

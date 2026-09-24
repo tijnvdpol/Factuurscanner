@@ -20,6 +20,7 @@ import {
   testWachtrij,
 } from "../lib/koppelingenApi";
 import { datumTijd } from "../lib/audit";
+import EmailInstellingen from "./EmailInstellingen";
 
 interface Props {
   organisatieId: string;
@@ -226,6 +227,16 @@ export default function KoppelingenPagina({ organisatieId, magBeheren }: Props) 
           </ul>
         )}
       </div>
+
+      {koppelingen && !alleenDatabase && (
+        <EmailInstellingen
+          key={JSON.stringify(koppelingen.find((k) => k.koppeling === "email")?.config ?? {})}
+          organisatieId={organisatieId}
+          magBeheren={magBeheren}
+          status={koppelingen.find((k) => k.koppeling === "email")!}
+          onOpgeslagen={laadKoppelingen}
+        />
+      )}
 
       <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">

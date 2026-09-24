@@ -9,12 +9,14 @@
 //   200 { uitkomst, melding }  alleen als de mailbox op mock staat (controller/beheerder): een testmail met
 //       een PDF-factuur gaat door dezelfde verwerking als echte mail. Bij "bekend" wordt het testdomein
 //       aan de vertrouwde afzenders toegevoegd (staat in de audit log).
+// POST { actie: "testmail", organisatie_id }
+//   200 { notificatie_id, melding }  testmail aan jezelf (controller/beheerder), via Resend of mock.
 //   4xx/5xx { error: string }
 //
 // Latere fasen voegen acties toe (verbinding testen, mapping ophalen, …).
 
-import { CORS_HEADERS, fout, gebruikerClient, json, serviceClient, UUID, wekWorker } from "../_shared/server.ts";
-import { effectieveModus, envNaamModus, koppelingOverzicht } from "../_shared/koppelingen/modus.ts";
+import { CORS_HEADERS, fout, gebruikerClient, json, modusVoor, serviceClient, UUID, wekWorker } from "../_shared/server.ts";
+import { koppelingOverzicht } from "../_shared/koppelingen/modus.ts";
 import { verwerkMail } from "../_shared/koppelingen/mailbox.ts";
 import { maakTestmail, TEST_AFZENDER } from "../_shared/koppelingen/testmail.ts";
 
@@ -66,13 +68,7 @@ Deno.serve(async (req) => {
         return fout(403, "Alleen een controller of beheerder kan een testmail simuleren.");
       }
       const soort = invoer.soort === "onbekend" ? "onbekend" : "bekend";
-      const { data: instelling } = await client
-        .from("koppeling_instellingen")
-        .select("modus")
-        .eq("organisatie_id", organisatieId)
-        .eq("koppeling", "mailbox")
-        .maybeSingle();
-      if (effectieveModus(Deno.env.get(envNaamModus("mailbox")), instelling?.modus).modus !== "mock") {
+      if ((await modusVoor(client, organisatieId, "mailbox")) !== "mock") {
         return fout(409, "De mailbox staat op live. Een testmail simuleren kan alleen in mock-modus.");
       }
       const { data: adres } = await client.from("inbox_adressen").select("adres").eq("organisatie_id", organisatieId).maybeSingle();
@@ -116,6 +112,17 @@ Deno.serve(async (req) => {
         console.error("Testmail simuleren mislukt:", err);
         return fout(500, err instanceof Error ? err.message : "Testmail simuleren mislukt.");
       }
+    }
+    case "testmail": {
+      const { data, error } = await client.rpc("plan_testmail", { p_organisatie_id: organisatieId });
+      if (error) return fout(error.code === "42501" ? 403 : 500, error.message);
+      wekWorker();
+      return json(200, {
+        notificatie_id: data,
+        melding: (await modusVoor(client, organisatieId, "email")) === "live"
+          ? `Testmail naar ${gebruiker.email} in de wachtrij. Hij komt binnen een minuut binnen.`
+          : `Testmail (mock) in de wachtrij. Binnen een minuut staat hij onder "Meldingen → Mijn mails".`,
+      });
     }
     default:
       return fout(400, "Onbekende actie.");

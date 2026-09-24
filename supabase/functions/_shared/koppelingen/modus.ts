@@ -60,6 +60,7 @@ export const KOPPELING_INFO: Record<Koppeling, KoppelingInfo> = {
     naam: "E-mailnotificaties",
     omschrijving: "Mails voor goedkeuren, afwijzingen, mislukte exports en bijna vervallen facturen.",
     secrets: ["RESEND_API_KEY", "MAIL_AFZENDER", "APP_URL"],
+    live: "Versturen via Resend. Mock verstuurt niets: de mails staan dan onder Meldingen → Mijn mails.",
   },
 };
 
