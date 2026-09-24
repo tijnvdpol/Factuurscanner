@@ -20,13 +20,14 @@ export interface FactuurData {
   kvk_nummer: string | null;
 }
 
-export const STATUSSEN = ["gescand", "gecontroleerd", "goedgekeurd", "betaald", "afgekeurd"] as const;
+export const STATUSSEN = ["gescand", "gecontroleerd", "goedgekeurd", "in_betaalbatch", "betaald", "afgekeurd"] as const;
 export type FactuurStatus = (typeof STATUSSEN)[number];
 
 export const STATUS_LABELS: Record<FactuurStatus, string> = {
   gescand: "Gescand",
   gecontroleerd: "Gecontroleerd",
   goedgekeurd: "Goedgekeurd",
+  in_betaalbatch: "In betaalbatch",
   betaald: "Betaald",
   afgekeurd: "Afgekeurd",
 };

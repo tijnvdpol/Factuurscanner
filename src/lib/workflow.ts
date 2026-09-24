@@ -104,6 +104,9 @@ export function mogelijkeActies(factuur: WorkflowFactuur, ctx: WorkflowContext):
  * Betaald = afgesloten (B38); geëxporteerd = correcties via de boekhouding (fase 4.5).
  */
 export function vergrendeling(factuur: Pick<Factuur, "status"> & { geexporteerd_op?: string | null }): string | null {
+  if (factuur.status === "in_betaalbatch") {
+    return "Deze factuur zit in een betaalbatch en kan niet worden gewijzigd. Annuleer eerst de batch (pagina Betalingen).";
+  }
   if (factuur.geexporteerd_op) {
     return "Deze factuur is geëxporteerd naar het boekhoudpakket en kan niet meer worden gewijzigd. Correcties lopen via de boekhouding.";
   }
@@ -116,7 +119,7 @@ export function magVerwijderen(
   factuur: Pick<Factuur, "status" | "workflow"> & { geexporteerd_op?: string | null },
   ctx: WorkflowContext,
 ): boolean {
-  if (factuur.geexporteerd_op) return false;
+  if (factuur.geexporteerd_op || factuur.status === "in_betaalbatch") return false;
   if (ctx.rol === "beheerder") return true;
   return factuur.workflow.ingevoerd_door === ctx.userId && (factuur.status === "gescand" || factuur.status === "afgekeurd");
 }
@@ -139,12 +142,13 @@ export function valtTerugNaGewijzigd(
   );
 }
 
-export type Filter = "te_controleren" | "te_keuren" | "te_betalen" | "afgekeurd" | "alles";
+export type Filter = "te_controleren" | "te_keuren" | "te_betalen" | "in_betaling" | "afgekeurd" | "alles";
 
 export const FILTERS: { sleutel: Filter; label: string; status: FactuurStatus | null }[] = [
   { sleutel: "te_controleren", label: "Te controleren", status: "gescand" },
   { sleutel: "te_keuren", label: "Te keuren", status: "gecontroleerd" },
   { sleutel: "te_betalen", label: "Te betalen", status: "goedgekeurd" },
+  { sleutel: "in_betaling", label: "In betaling", status: "in_betaalbatch" },
   { sleutel: "afgekeurd", label: "Afgekeurd", status: "afgekeurd" },
   { sleutel: "alles", label: "Alles", status: null },
 ];

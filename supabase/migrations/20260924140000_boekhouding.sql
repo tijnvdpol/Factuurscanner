@@ -167,7 +167,8 @@ security definer
 set search_path = ''
 as $$
 begin
-  if new.status = 'goedgekeurd' and old.status is distinct from 'goedgekeurd' and new.geexporteerd_op is null
+  -- Alleen bij echt goedkeuren (niet als een geannuleerde betaalbatch de factuur terugzet naar goedgekeurd)
+  if new.status = 'goedgekeurd' and old.status = 'gecontroleerd' and new.geexporteerd_op is null
      and coalesce((select (config ->> 'automatisch')::boolean from public.koppeling_instellingen
                    where organisatie_id = new.organisatie_id and koppeling = 'boekhouding'
                      and config ->> 'automatisch' in ('true', 'false')), true) then
@@ -201,7 +202,7 @@ begin
   for v_id in
     select f.id from public.facturen f
     where f.organisatie_id = p_organisatie_id
-      and f.status in ('goedgekeurd', 'betaald')
+      and f.status in ('goedgekeurd', 'in_betaalbatch', 'betaald')  -- in_betaalbatch: fase 4.6
       and f.geexporteerd_op is null
       and (p_factuur_ids is null or f.id = any (p_factuur_ids))
       and not exists (select 1 from public.koppeling_taken t
@@ -301,7 +302,7 @@ begin
       format('Al geëxporteerd naar %s (%s).', v_export.provider, v_export.extern_id),
       'export', to_jsonb(v_export));
   end if;
-  if f.status not in ('goedgekeurd', 'betaald') or f.goedgekeurd_op is null then
+  if f.status not in ('goedgekeurd', 'in_betaalbatch', 'betaald') or f.goedgekeurd_op is null then
     return jsonb_build_object('status', 'niet_toegestaan', 'reden',
       format('Alleen goedgekeurde facturen worden geëxporteerd (status: %s).', f.status));
   end if;

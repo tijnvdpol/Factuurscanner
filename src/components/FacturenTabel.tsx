@@ -19,6 +19,7 @@ const STATUS_KLASSEN: Record<FactuurStatus, string> = {
   gescand: "bg-slate-100 text-slate-600",
   gecontroleerd: "bg-sky-100 text-sky-700",
   goedgekeurd: "bg-indigo-100 text-indigo-700",
+  in_betaalbatch: "bg-violet-100 text-violet-700",
   betaald: "bg-emerald-100 text-emerald-700",
   afgekeurd: "bg-red-100 text-red-700",
 };

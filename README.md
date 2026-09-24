@@ -26,7 +26,7 @@ met rollen, een goedkeuringsworkflow met functiescheiding, een audit trail en ko
 | `supabase/functions/mail-actie/` | Knoppen Goedkeuren/Afkeuren uit een goedkeuringsmail (ondertekend, eenmalig token) |
 | `supabase/functions/_shared/geminiScan.ts` | Gemini-scan met modelkeuze en fallback (gedeeld door scan-factuur en de mailbox) |
 | `supabase/functions/_shared/koppelingen/` | Gedeelde, testbare logica van de koppelingen (modus, taken, adapters) |
-| `supabase/handtests/` | Testscripts voor de SQL Editor (`fase1_rls.sql`, `fase2_3_workflow.sql`, `fase4_1_koppelingen.sql` t/m `fase4_5_boekhouding.sql`) |
+| `supabase/handtests/` | Testscripts voor de SQL Editor (`fase1_rls.sql`, `fase2_3_workflow.sql`, `fase4_1_koppelingen.sql` t/m `fase4_6_betalingen.sql`) |
 | `supabase/tests/` | Geautomatiseerde databasetests (Vitest + PGlite, geen Docker nodig) |
 | `src/lib/veldvalidatie.ts`, `signalen.ts`, `workflow.ts`, `codering.ts`, `audit.ts` | Pure functies (validatie, signaalregels, statusregels, coderingsvoorstel, leesbare audit log) |
 | `docs/beslissingen.md` | Ontwerpbeslissingen (stap 2 en 3, koppelingen) |
@@ -117,7 +117,7 @@ pagina Koppelingen laat zien welke secrets voor live nog ontbreken (alleen de na
 | Mailbox-import | `MAILBOX` | Mailgun-account (gratis plan) + eigen (sub)domein + `MAILGUN_SIGNING_KEY` | fase 4.3 ✅ |
 | E-mailnotificaties | `EMAIL` | Resend-account (gratis plan) + eigen domein + `RESEND_API_KEY`, `MAIL_AFZENDER`, `APP_URL` | fase 4.4 ✅ |
 | Boekhoudpakket | `BOEKHOUDING` | Moneybird (testadministratie) + `MONEYBIRD_TOKEN`, `MONEYBIRD_ADMINISTRATIE_ID` | fase 4.5 ✅ |
-| Betaalopdrachten | `BETALING` | niets (live = SEPA-bestand downloaden) | fase 4.6 |
+| Betaalopdrachten | `BETALING` | niets (live = SEPA-bestand downloaden) | fase 4.6 ✅ |
 | Power BI | – | Power BI Desktop + een rapportagerol | fase 4.7 |
 
 Mislukt een koppeling, dan probeert de wachtrij het automatisch opnieuw (na 1 min, 5 min, 30 min, 2 uur en 12 uur). In
@@ -345,6 +345,45 @@ later een kwestie van één klasse toevoegen.
    factuur goed. Binnen een minuut staat hij in Moneybird onder *Inkoopfacturen* (met het PDF) en staat "geboekt" in de
    lijst. Moneybird staat 150 verzoeken per 5 minuten toe; bij een grote achterstand gaat de rest vanzelf later.
 
+### Betaalopdrachten (fase 4.6)
+
+Pagina **Betalingen** (controller en beheerder):
+
+1. **Betalende rekening** (beheerder, eenmalig): naam, IBAN en eventueel BIC van de rekening waar de betalingen vanaf gaan.
+2. **Te betalen:** de goedgekeurde facturen op vervaldatum. Selecteer facturen, kies de uitvoerdatum (standaard de volgende
+   werkdag) en klik **Maak betaalbatch**. De facturen gaan naar status **In betaalbatch** en zijn dan vergrendeld (wijzigen
+   of verwijderen kan niet, ook de knop "betaald" niet).
+3. **Controles** (in de database, dus ook bij rechtstreekse aanroepen): alleen goedgekeurde facturen, alleen euro, bedrag
+   tussen € 0,01 en € 999.999.999,99, een geldig IBAN (zelfde controle als overal in de app) uit het SEPA-gebied, een naam,
+   en geen open kritiek signaal (zoals een afwijkend IBAN). Een factuur kan maar in één actieve batch zitten. Is één factuur
+   niet in orde, dan wordt er geen batch gemaakt en staan alle problemen in de melding.
+4. **Live:** klik **SEPA-bestand** (pain.001.001.03, gevalideerd tegen het officiële XSD) en upload het in je
+   internetbankieren (bij de meeste banken: *Betalen → Batch/bestand importeren*). Klik daarna **Bij de bank aangeboden** en,
+   als de bank het heeft uitgevoerd, **Uitgevoerd door de bank**: de facturen worden dan *Betaald*.
+5. **Annuleren** (met reden) kan zolang de batch niet is verwerkt: de facturen gaan terug naar *Goedgekeurd*.
+
+Status per factuur: *Goedgekeurd → In betaalbatch → Betaald*. In de factuurlijst staat een tab *In betaling*. Elke stap
+(batch gemaakt, bestand gedownload, ingediend, bevestigd, geannuleerd, per factuur de statuswijziging) staat in de audit log
+met bron *Bank*. De knop goedgekeurd → betaald in de factuurlijst blijft voor handmatige betalingen buiten een batch.
+
+**Mock-modus** (standaard): na het maken dient de worker de batch in bij een **gesimuleerde bank**. Die bevestigt na ongeveer
+een minuut per betaling *betaald* of *geweigerd*, zoals een echte bank-API. Een bedrag dat eindigt op **,13** wordt geweigerd
+met AC04 (rekening opgeheven), op **,14** met AM05 (dubbele betaling). Een geweigerde factuur gaat terug naar *Goedgekeurd*
+en kan in een nieuwe batch. Let op: in mock-modus worden facturen als betaald gemarkeerd zonder echte betaling; de pagina
+toont dat met een gele balk. De bank-adapter (`BankProvider` in `_shared/koppelingen/bank.ts`) is de plek om later een
+echte bank-API aan te sluiten.
+
+**Instellen:**
+
+1. Migratie `20260924150000_betalingen.sql` uitvoeren.
+2. `verwerk-taken` opnieuw deployen: `npx.cmd supabase functions deploy verwerk-taken --use-api --project-ref <project-ref>`
+3. Frontend opnieuw deployen (Vercel).
+4. Pagina **Betalingen**: betalende rekening invullen (beheerder).
+5. Live gebruiken: **Koppelingen → Betaalopdrachten** op *Live* (of secret `KOPPELING_BETALING_MODUS=live`). Er zijn geen
+   accounts of sleutels nodig.
+6. **Controleren:** draai `supabase/handtests/fase4_6_betalingen.sql` (verwacht: `GESLAAGD: alle 9 tests ok`). Upload het
+   eerste bestand bij je bank eerst als test (de meeste banken tonen een controle vóór het versturen).
+
 ## Beveiliging
 
 - Elke tabel heeft RLS op lidmaatschap van de organisatie (`is_lid`/`heeft_rol`). `btw_regels` wordt beveiligd via de bijbehorende factuur.
@@ -356,6 +395,8 @@ later een kwestie van één klasse toevoegen.
 - Koppelingen: Edge Functions met de service-rolsleutel wijzigen facturen alleen via databasefuncties die dezelfde controles
   doen als de app. De service role kan de status niet rechtstreeks wijzigen (trigger). De worker is alleen aan te roepen met
   `WORKER_GEHEIM`; de takenwachtrij is voor gebruikers alleen-lezen.
+- Een factuur in een betaalbatch is vergrendeld; de status "in betaalbatch" en "betaald via de bank" zetten alleen de
+  betaalfuncties in de database. De controles op IBAN en bedrag staan in de database, niet alleen in de app.
 - Na export naar het boekhoudpakket is een factuur vergrendeld en niet te verwijderen (trigger + kolomrechten); het
   exportmoment zet alleen de server.
 - Mail-links: ondertekend token met verlooptijd, eenmalig; de server controleert rol, limiet en functiescheiding opnieuw.

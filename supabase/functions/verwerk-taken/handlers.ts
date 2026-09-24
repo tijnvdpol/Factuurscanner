@@ -12,6 +12,7 @@ import { appUrlVoor, emailHandler, MailMock, ResendLive } from "../_shared/koppe
 import { mailTokenSleutel } from "../_shared/koppelingen/mailtoken.ts";
 import { boekhoudHandler } from "../_shared/koppelingen/boekhouding.ts";
 import { kiesBoekhoudProvider } from "../_shared/koppelingen/boekhoudProvider.ts";
+import { BankMock, betalingHandler } from "../_shared/koppelingen/bank.ts";
 import { mimeTypeVoor, scanMetGemini } from "../_shared/geminiScan.ts";
 import type { Rekening } from "../_shared/gemini.ts";
 
@@ -140,6 +141,17 @@ export function maakHandlers(supabase: SupabaseClient): Record<string, TaakHandl
         if (error || !data) throw new Error(`Bestand downloaden mislukt: ${error?.message ?? "niet gevonden"}`);
         return new Uint8Array(await data.arrayBuffer());
       },
+    }),
+
+    betaling: betalingHandler({
+      modus: (organisatieId, koppeling) => modusVoor(supabase, organisatieId, koppeling),
+      rpc: async (functie, args) => {
+        const { data, error } = await supabase.rpc(functie, args);
+        if (error) throw new Error(`${functie}: ${error.message}`);
+        return data;
+      },
+      // Live: nog geen bank-API (het bestand gaat via de app naar de bank); mock: de gesimuleerde bank.
+      bank: (modus) => (modus === "mock" ? new BankMock() : null),
     }),
   };
 }

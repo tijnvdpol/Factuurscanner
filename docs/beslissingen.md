@@ -580,3 +580,57 @@ betaalbatch of na export inhoudelijk vergrendeld; de knop goedgekeurd → betaal
 - **Niet getest tegen de echte API** (geen account bij de bouw): de verzoeken zijn opgesteld volgens de documentatie op
   developer.moneybird.com en met unit-tests op vorm en foutafhandeling gecontroleerd. De eerste live-export in de
   testadministratie is dus ook de eerste echte test.
+
+## Fase 4.6: betaalopdrachten
+
+### B87. Een echte status "in_betaalbatch"
+- **Wat:** `facturen.status` krijgt `in_betaalbatch` (goedgekeurd → in_betaalbatch → betaald). Alleen de betaalfuncties
+  (security definer) zetten die status, met een statuswijziging in de audit log (bron betaling, gebruiker of systeem).
+  `wijzig_status` kent geen overgang vanuit `in_betaalbatch`, dus de handmatige knop "betaald" werkt daar niet: een factuur in
+  een batch wordt betaald via de batch.
+- **Waarom:** de opdracht vraagt een zichtbare status per factuur. Een aparte kolom naast `status` zou op elke plek
+  (tabs, rapportages, vergrendeling, verwijderen) een extra uitzondering vragen.
+- **Gevolgen elders:** export naar de boekhouding mag ook in deze status; de automatische export start alleen bij echt
+  goedkeuren (gecontroleerd → goedgekeurd), niet als een geannuleerde batch de factuur terugzet; herinneringen "bijna
+  vervallen" slaan facturen in een batch over.
+
+### B88. Controles in de database, één actieve batch per factuur
+- **Wat:** `maak_betaalbatch` controleert per factuur (`intern.betaal_blokkade`): status goedgekeurd, euro, bedrag
+  0,01–999.999.999,99, IBAN geldig (`intern.controleer_iban`, dezelfde controle als overal) en uit het SEPA-gebied, naam
+  aanwezig, geen open kritiek signaal. Alle problemen komen in één melding en er wordt niets aangemaakt. Dubbel betalen
+  wordt drie keer tegengehouden: de status (alleen goedgekeurd), een advisory lock per organisatie met `for update` op de
+  facturen, en een unieke index op `betaalbatch_posten(factuur_id)` voor open en betaalde posten.
+- **Kritiek signaal:** bijvoorbeeld een IBAN dat afwijkt van het bekende IBAN van de leverancier (de klassieke
+  factuurfraude). Dat moet eerst worden opgelost, net als bij goedkeuren.
+- **Rollen:** controller en beheerder, dezelfde rollen die in de app "betaald" mogen zetten.
+- **De app** toont dezelfde regels vooraf (`betaalBlokkade` in `betalingen.ts`), zodat je niet kunt selecteren wat toch
+  wordt geweigerd; de database blijft leidend.
+
+### B89. Het SEPA-bestand maakt de app; de database bewaart de gegevens
+- **Wat:** batch en posten (naam, IBAN, bedrag, omschrijving "Factuur <nummer>", kenmerk `<batchnummer>-<volgnr>`) staan
+  vast in de database op het moment van aanmaken. Het XML-bestand wordt uit die gegevens gemaakt
+  (`_shared/koppelingen/sepa.ts`), in de browser om te downloaden en in de worker voor de mock-bank. Zelfde batch → exact
+  hetzelfde bestand (MsgId = batchnummer, CreDtTm = aanmaakmoment), dus opnieuw downloaden is veilig. Elke download staat in
+  de audit log.
+- **Waarom:** er zijn geen geheimen nodig, dus het kan in de app; zo is er één generator voor beide modi. Wijzigingen aan de
+  factuur na het aanmaken zijn door de vergrendeling niet mogelijk.
+- **Tekens:** accenten eruit, & wordt +, alles buiten de SEPA-tekenset wordt een spatie. Zonder BIC: `NOTPROVIDED` (EPC-
+  richtlijn, sinds 2016 binnen de EER). De ontvanger krijgt geen BIC (niet nodig binnen SEPA).
+
+### B90. Getest tegen het officiële XSD
+- **Wat:** `supabase/tests/sepa-voorbeeld.test.ts` schrijft met `SEPA_VOORBEELD=<pad>` twee voorbeeldbestanden (met en zonder
+  BIC, met accenten, & en < in de naam). Die zijn gevalideerd tegen pain.001.001.03.xsd (ISO 20022, kopie uit het
+  open-sourceproject php-sepa-xml) met .NET `XmlSchemaSet` in PowerShell: beide geldig (24-09-2026).
+- **Niet getest:** het uploaden bij een echte bank. De eerste upload is dus de eerste echte test; de meeste banken tonen
+  eerst een controle.
+
+### B91. Mock-bank via de wachtrij, met een adapter voor later
+- **Wat:** `BankProvider` (indienen, status). Na het maken plant de database een betaling-taak "indienen"; in mock-modus
+  dient de worker het bestand in bij `BankMock`, `registreer_batch_ingediend` plant na een minuut "status", en
+  `verwerk_bankbevestiging` verwerkt per betaling betaald (factuur betaald) of geweigerd (factuur terug naar goedgekeurd, met
+  de reden van de bank). Live doet de taak niets: er is (nog) geen bank-API; de gebruiker downloadt, uploadt en bevestigt.
+- **Modus bij verwerken:** de worker bepaalt de modus (env gaat voor, B57). Staat de koppeling op live, dan wordt er nooit
+  gesimuleerd, ook niet voor een batch die in mock-modus is gemaakt.
+- **Mock "betaalt":** in mock-modus worden facturen als betaald gemarkeerd zonder echte betaling. De pagina Betalingen toont
+  dat met een gele balk en de batch met "mock", en de audit log vermeldt "mock".
+- **Weigeringen testen:** bedrag eindigt op ,13 → AC04, op ,14 → AM05 (echte SEPA-redencodes).
