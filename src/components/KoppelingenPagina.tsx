@@ -20,6 +20,7 @@ import {
   testWachtrij,
 } from "../lib/koppelingenApi";
 import { datumTijd } from "../lib/audit";
+import BoekhoudingInstellingen from "./BoekhoudingInstellingen";
 import EmailInstellingen from "./EmailInstellingen";
 
 interface Props {
@@ -227,6 +228,16 @@ export default function KoppelingenPagina({ organisatieId, magBeheren }: Props) 
           </ul>
         )}
       </div>
+
+      {koppelingen && !alleenDatabase && (
+        <BoekhoudingInstellingen
+          key={JSON.stringify(koppelingen.find((k) => k.koppeling === "boekhouding")?.config ?? {})}
+          organisatieId={organisatieId}
+          magBeheren={magBeheren}
+          status={koppelingen.find((k) => k.koppeling === "boekhouding")!}
+          onOpgeslagen={laadKoppelingen}
+        />
+      )}
 
       {koppelingen && !alleenDatabase && (
         <EmailInstellingen

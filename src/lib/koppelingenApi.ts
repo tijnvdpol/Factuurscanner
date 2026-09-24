@@ -57,6 +57,27 @@ export async function stelKoppelingIn(organisatieId: string, koppeling: Koppelin
   if (error) throw vertaalFout(error);
 }
 
+/**
+ * Slaat de (niet-geheime) config van een koppeling op en laat de modus in de database ongemoeid, ook als een
+ * env-variabele hem vastzet (anders zou de vastgezette modus in de database belanden).
+ */
+export async function slaKoppelingConfigOp(organisatieId: string, koppeling: Koppeling, config: Record<string, unknown>): Promise<void> {
+  const { data: huidig, error: leesFout } = await supabase
+    .from("koppeling_instellingen")
+    .select("modus")
+    .eq("organisatie_id", organisatieId)
+    .eq("koppeling", koppeling)
+    .maybeSingle();
+  if (leesFout) throw vertaalFout(leesFout);
+  const { error } = await supabase.rpc("stel_koppeling_in", {
+    p_organisatie_id: organisatieId,
+    p_koppeling: koppeling,
+    p_modus: huidig?.modus ?? "mock",
+    p_config: config,
+  });
+  if (error) throw vertaalFout(error);
+}
+
 /** Zet een testtaak in de wachtrij en maakt de worker wakker. */
 export async function testWachtrij(organisatieId: string): Promise<string> {
   return (await koppelingActie<{ taak_id: string }>("test_wachtrij", organisatieId)).taak_id;

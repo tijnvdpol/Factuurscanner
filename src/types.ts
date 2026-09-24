@@ -92,6 +92,8 @@ export interface Factuur extends FactuurData {
   euro: EuroOmrekening;
   /** upload = gescand in de app; mailbox = uit een gemailde bijlage (dan is "ingevoerd door" leeg) */
   herkomst: "upload" | "mailbox";
+  /** Geëxporteerd naar het boekhoudpakket (tijdstip); daarna inhoudelijk vergrendeld. */
+  geexporteerd_op: string | null;
   /** Laatste taak per koppeling (VIES, export, …); leeg als er niets loopt of de status niet geladen kon worden. */
   koppelingen: KoppelingTaakStatus[];
 }

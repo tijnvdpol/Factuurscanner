@@ -10,6 +10,8 @@ import { KVK_TEST_SLEUTEL, KVK_URL, KvkLive, KvkMock } from "../_shared/koppelin
 import { type InboxBijlageRij, mailboxHandler, mockScan } from "../_shared/koppelingen/mailbox.ts";
 import { appUrlVoor, emailHandler, MailMock, ResendLive } from "../_shared/koppelingen/email.ts";
 import { mailTokenSleutel } from "../_shared/koppelingen/mailtoken.ts";
+import { boekhoudHandler } from "../_shared/koppelingen/boekhouding.ts";
+import { kiesBoekhoudProvider } from "../_shared/koppelingen/boekhoudProvider.ts";
 import { mimeTypeVoor, scanMetGemini } from "../_shared/geminiScan.ts";
 import type { Rekening } from "../_shared/gemini.ts";
 
@@ -123,6 +125,21 @@ export function maakHandlers(supabase: SupabaseClient): Record<string, TaakHandl
       provider: (modus) => (modus === "live" ? resendLive() : new MailMock()),
       appUrl: (modus) => appUrlVoor(modus, Deno.env.get("APP_URL")),
       tokenSleutel: () => mailTokenSleutel((naam) => Deno.env.get(naam)),
+    }),
+
+    boekhouding: boekhoudHandler({
+      modus: (organisatieId, koppeling) => modusVoor(supabase, organisatieId, koppeling),
+      rpc: async (functie, args) => {
+        const { data, error } = await supabase.rpc(functie, args);
+        if (error) throw new Error(`${functie}: ${error.message}`);
+        return data;
+      },
+      provider: (pakket, modus) => kiesBoekhoudProvider(pakket, modus, (naam) => Deno.env.get(naam)),
+      bestand: async (pad) => {
+        const { data, error } = await supabase.storage.from(BUCKET).download(pad);
+        if (error || !data) throw new Error(`Bestand downloaden mislukt: ${error?.message ?? "niet gevonden"}`);
+        return new Uint8Array(await data.arrayBuffer());
+      },
     }),
   };
 }

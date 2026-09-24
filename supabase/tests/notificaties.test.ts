@@ -198,7 +198,8 @@ describe("andere meldingen", () => {
     await alsBeheerder(db);
     await db.query("select intern.plan_taak($1, 'boekhouding', $2, $3)", [org, id, id]);
     await alsServiceRole(db);
-    const [taak] = await rijen<{ id: string }>(db, "select id from public.claim_taken(10, array['boekhouding'])");
+    // (ook de automatische exports van eerder goedgekeurde facturen worden geclaimd; die maken hier niet uit)
+    const [taak] = await rijen<{ id: string }>(db, "select id from public.claim_taken(50, array['boekhouding']) where sleutel = $1", [id]);
     await db.query("select public.rond_taak_af($1, false, null, 'Grootboekrekening 4300 niet gekoppeld', false)", [taak.id]);
     const lijst = await notificaties({ soort: "export_mislukt", factuur_id: id });
     expect(ontvangers(lijst)).toEqual([beheerder, controller].sort());

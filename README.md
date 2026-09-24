@@ -26,7 +26,7 @@ met rollen, een goedkeuringsworkflow met functiescheiding, een audit trail en ko
 | `supabase/functions/mail-actie/` | Knoppen Goedkeuren/Afkeuren uit een goedkeuringsmail (ondertekend, eenmalig token) |
 | `supabase/functions/_shared/geminiScan.ts` | Gemini-scan met modelkeuze en fallback (gedeeld door scan-factuur en de mailbox) |
 | `supabase/functions/_shared/koppelingen/` | Gedeelde, testbare logica van de koppelingen (modus, taken, adapters) |
-| `supabase/handtests/` | Testscripts voor de SQL Editor (`fase1_rls.sql`, `fase2_3_workflow.sql`, `fase4_1_koppelingen.sql` t/m `fase4_4_notificaties.sql`) |
+| `supabase/handtests/` | Testscripts voor de SQL Editor (`fase1_rls.sql`, `fase2_3_workflow.sql`, `fase4_1_koppelingen.sql` t/m `fase4_5_boekhouding.sql`) |
 | `supabase/tests/` | Geautomatiseerde databasetests (Vitest + PGlite, geen Docker nodig) |
 | `src/lib/veldvalidatie.ts`, `signalen.ts`, `workflow.ts`, `codering.ts`, `audit.ts` | Pure functies (validatie, signaalregels, statusregels, coderingsvoorstel, leesbare audit log) |
 | `docs/beslissingen.md` | Ontwerpbeslissingen (stap 2 en 3, koppelingen) |
@@ -116,7 +116,7 @@ pagina Koppelingen laat zien welke secrets voor live nog ontbreken (alleen de na
 | Verrijken: KvK | `KVK` | `KVK_API_KEY` (productie), of `KVK_OMGEVING=test` zonder sleutel | fase 4.2 ✅ |
 | Mailbox-import | `MAILBOX` | Mailgun-account (gratis plan) + eigen (sub)domein + `MAILGUN_SIGNING_KEY` | fase 4.3 ✅ |
 | E-mailnotificaties | `EMAIL` | Resend-account (gratis plan) + eigen domein + `RESEND_API_KEY`, `MAIL_AFZENDER`, `APP_URL` | fase 4.4 ✅ |
-| Boekhoudpakket | `BOEKHOUDING` | Moneybird + `MONEYBIRD_TOKEN`, `MONEYBIRD_ADMINISTRATIE_ID` | fase 4.5 |
+| Boekhoudpakket | `BOEKHOUDING` | Moneybird (testadministratie) + `MONEYBIRD_TOKEN`, `MONEYBIRD_ADMINISTRATIE_ID` | fase 4.5 ✅ |
 | Betaalopdrachten | `BETALING` | niets (live = SEPA-bestand downloaden) | fase 4.6 |
 | Power BI | – | Power BI Desktop + een rapportagerol | fase 4.7 |
 
@@ -297,6 +297,54 @@ definitieve fout ("Mail niet verzonden" bij de factuur).
    mail op *In wachtrij* staan of mislukt hij, kijk dan bij Koppelingen → Wachtrij (de foutmelding van Resend staat erbij)
    en in Resend → Logs.
 
+### Boekhoudpakket (fase 4.5)
+
+Goedgekeurde facturen worden als **inkoopfactuur** geboekt in het boekhoudpakket, met het PDF als bijlage:
+
+- **Wanneer:** automatisch direct na goedkeuren (uit te zetten), of met **Koppelingen → Boekhoudpakket → Nu exporteren**
+  voor alle goedgekeurde of betaalde facturen die nog niet zijn geëxporteerd. Andere facturen worden nooit geëxporteerd.
+- **Mapping:** per pakket koppel je je grootboekrekeningen en de btw-tarieven (21%, 9%, 0%) aan die van het pakket.
+  *Automatisch koppelen* doet dat op code, naam en percentage; controleer het resultaat. Leveranciers worden bij de eerste
+  export in het pakket gezocht (KvK-nummer, btw-nummer, naam) of aangemaakt, en daarna onthouden. Een leverancier kun je
+  ontkoppelen, dan wordt hij bij de volgende export opnieuw gezocht.
+- **Geen dubbele boekingen:** per factuur wordt één export met het externe id opgeslagen. Staat de factuur (zelfde
+  leverancier en factuurnummer) al in het pakket, bijvoorbeeld omdat een eerdere poging halverwege is afgebroken, dan wordt
+  die gekoppeld in plaats van opnieuw aangemaakt.
+- **Na export** is de factuur vergrendeld ("geboekt" in de lijst): inhoud, btw-regels en verwijderen zijn geblokkeerd,
+  correcties doe je in het pakket. Als betaald markeren kan wel.
+- **Fouten:** een ontbrekende mapping of een weigering door het pakket geeft direct "Export mislukt" bij de factuur (plus een
+  mail aan controllers en beheerders, fase 4.4). Los het op en klik op de badge om het opnieuw te proberen. Tijdelijke
+  fouten (Moneybird druk of onbereikbaar) worden automatisch opnieuw geprobeerd.
+
+**Pakketten:** Moneybird werkt live. Exact Online en SnelStart zijn alleen als mock beschikbaar (eigen rekeningschema en
+btw-codes); de adapter-interface (`AccountingProvider` in `_shared/koppelingen/boekhouding.ts`) maakt een echte koppeling
+later een kwestie van één klasse toevoegen.
+
+**Mock-modus** (standaard): werkt voor alle drie de pakketten zonder account. Fouten testen via het factuurnummer: met
+`TIJDELIJK` erin volgt een tijdelijke fout (nieuwe pogingen), met `WEIGER` erin weigert het pakket de factuur.
+
+**Live instellen (Moneybird):**
+
+1. Account maken op moneybird.nl en een **testadministratie** aanmaken (gratis, bedoeld voor ontwikkelaars; kies bij het
+   aanmaken van een administratie voor een testadministratie). Gebruik die tot alles werkt, en pas daarna je echte
+   administratie.
+2. **API-token:** in Moneybird → Instellingen → Ontwikkelaars → *Nieuwe API-token* (persoonlijk token) met de scopes
+   **documents**, **settings** en **sales_invoices** (voor contacten).
+3. **Administratie-id:** het getal in de adresbalk als je de administratie opent: `moneybird.com/<administratie-id>/…`.
+4. **Supabase secrets:** `MONEYBIRD_TOKEN` en `MONEYBIRD_ADMINISTRATIE_ID`.
+5. **Migratie** `20260924140000_boekhouding.sql` uitvoeren.
+6. **Deployen** (commando's één voor één):
+   ```powershell
+   npx.cmd supabase functions deploy verwerk-taken --use-api --project-ref <project-ref>
+   npx.cmd supabase functions deploy koppeling-actie --use-api --project-ref <project-ref>
+   ```
+7. In de app: **Koppelingen → Boekhoudpakket**: pakket *Moneybird*, dan zet je de koppeling op *Live* (of secret
+   `KOPPELING_BOEKHOUDING_MODUS=live`), klik *Rekeningen ophalen uit Moneybird* (dit test ook de verbinding), dan
+   *Automatisch koppelen*, en controleer de koppelingen.
+8. **Controleren:** draai `supabase/handtests/fase4_5_boekhouding.sql` (verwacht: `GESLAAGD: alle 9 tests ok`) en keur een
+   factuur goed. Binnen een minuut staat hij in Moneybird onder *Inkoopfacturen* (met het PDF) en staat "geboekt" in de
+   lijst. Moneybird staat 150 verzoeken per 5 minuten toe; bij een grote achterstand gaat de rest vanzelf later.
+
 ## Beveiliging
 
 - Elke tabel heeft RLS op lidmaatschap van de organisatie (`is_lid`/`heeft_rol`). `btw_regels` wordt beveiligd via de bijbehorende factuur.
@@ -308,6 +356,8 @@ definitieve fout ("Mail niet verzonden" bij de factuur).
 - Koppelingen: Edge Functions met de service-rolsleutel wijzigen facturen alleen via databasefuncties die dezelfde controles
   doen als de app. De service role kan de status niet rechtstreeks wijzigen (trigger). De worker is alleen aan te roepen met
   `WORKER_GEHEIM`; de takenwachtrij is voor gebruikers alleen-lezen.
+- Na export naar het boekhoudpakket is een factuur vergrendeld en niet te verwijderen (trigger + kolomrechten); het
+  exportmoment zet alleen de server.
 - Mail-links: ondertekend token met verlooptijd, eenmalig; de server controleert rol, limiet en functiescheiding opnieuw.
   Bevestigen gebeurt altijd op een pagina, dus een link-scanner van een mailprogramma voert niets uit. De inhoud van
   mock-mails is alleen leesbaar voor de ontvanger; van echte mails wordt de inhoud niet bewaard.

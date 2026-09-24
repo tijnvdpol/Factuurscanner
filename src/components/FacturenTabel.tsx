@@ -6,6 +6,7 @@ import {
   FILTERS,
   filterFacturen,
   magVerwijderen,
+  vergrendeling,
   mogelijkeActies,
   type Filter,
   type MogelijkeActie,
@@ -134,6 +135,11 @@ export default function FacturenTabel({
                           mail
                         </span>
                       )}
+                      {f.geexporteerd_op && (
+                        <span title="Geëxporteerd naar het boekhoudpakket" className="ml-1.5 rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-700">
+                          geboekt
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-2.5 text-slate-600">{f.factuurnummer ?? "—"}</td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-slate-600">{f.factuurdatum ?? "—"}</td>
@@ -220,7 +226,7 @@ export default function FacturenTabel({
                           onClick={() => onBewerken(f.id)}
                           className="rounded p-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-900"
                         >
-                          {f.status === "betaald" ? "Bekijken" : "Bewerken"}
+                          {vergrendeling(f) ? "Bekijken" : "Bewerken"}
                         </button>
                         {magVerwijderen(f, context) && (
                           <button

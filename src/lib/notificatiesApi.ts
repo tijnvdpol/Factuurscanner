@@ -1,6 +1,6 @@
 import { FunctionsHttpError } from "@supabase/supabase-js";
 import { vertaalFout } from "./facturenApi";
-import { koppelingActie } from "./koppelingenApi";
+import { koppelingActie, slaKoppelingConfigOp } from "./koppelingenApi";
 import type { EmailConfig, Notificatie, NotificatieInhoud } from "./notificaties";
 import { supabase } from "./supabase";
 
@@ -30,22 +30,8 @@ export async function stuurTestmail(organisatieId: string): Promise<string> {
   return (await koppelingActie<{ melding: string }>("testmail", organisatieId)).melding;
 }
 
-/** Slaat de config op en laat de modus in de database ongemoeid (ook als een env-variabele hem vastzet). */
 export async function slaEmailConfigOp(organisatieId: string, config: EmailConfig): Promise<void> {
-  const { data: huidig, error: leesFout } = await supabase
-    .from("koppeling_instellingen")
-    .select("modus")
-    .eq("organisatie_id", organisatieId)
-    .eq("koppeling", "email")
-    .maybeSingle();
-  if (leesFout) throw vertaalFout(leesFout);
-  const { error } = await supabase.rpc("stel_koppeling_in", {
-    p_organisatie_id: organisatieId,
-    p_koppeling: "email",
-    p_modus: huidig?.modus ?? "mock",
-    p_config: config,
-  });
-  if (error) throw vertaalFout(error);
+  await slaKoppelingConfigOp(organisatieId, "email", { ...config });
 }
 
 // ---------------------------------------------------------------------------

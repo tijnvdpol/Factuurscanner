@@ -518,3 +518,65 @@ betaalbatch of na export inhoudelijk vergrendeld; de knop goedgekeurd → betaal
   Resend bij de taak en de notificatie.
 - **Waarom Resend:** gratis plan (3.000/maand, 100/dag) is genoeg voor één organisatie; eenvoudige REST-API met idempotentie.
   Inkomende mail blijft Mailgun (B66).
+
+## Fase 4.5: boekhoudpakket
+
+### B81. Eén adapter-interface, mock per pakket, live alleen Moneybird
+- **Wat:** `AccountingProvider` (grootboekrekeningen, btw-codes, leverancier zoeken of aanmaken, inkoopfactuur zoeken en
+  aanmaken, bijlage). `MoneybirdLive` praat met de API; `BoekhoudMock` bootst Moneybird, Exact Online en SnelStart na, elk met
+  een eigen rekeningschema, eigen btw-codes en de id-vorm van dat pakket. Welk pakket geldt, staat in de config van de
+  koppeling (`provider`, standaard Moneybird).
+- **Live met Exact of SnelStart** geeft een duidelijke, definitieve fout ("alleen als mock beschikbaar"), in plaats van
+  een neppe export die als echte boeking in de audit log komt.
+- **Waarom:** de opdracht vraagt uitwisselbare pakketten, met Moneybird live en de andere twee als mock. De taak zelf
+  (`boekhoudHandler`) kent alleen de interface.
+
+### B82. Export pas na goedkeuren, automatisch of via de knop
+- **Wat:** een trigger plant de export zodra de status *goedgekeurd* wordt (config `automatisch`, standaard aan). De knop
+  *Nu exporteren* (controller/beheerder) plant alle goedgekeurde of betaalde facturen zonder export. De worker controleert
+  opnieuw of de factuur goedgekeurd is (`export_gegevens`): een taak die in de wachtrij stond terwijl de factuur werd
+  teruggezet, exporteert dus niets.
+- **Betaald** hoort erbij: een factuur die al handmatig als betaald was gemarkeerd vóór de koppeling, moet ook in de
+  boekhouding komen.
+
+### B83. Dubbele export voorkomen: database plus zoeken in het pakket
+- **Wat:** `boekhoud_exports` is uniek per factuur; `registreer_export` weigert een tweede, ander extern id. Vóór het
+  aanmaken zoekt de worker in het pakket naar een inkoopfactuur van dezelfde leverancier met dezelfde referentie
+  (het factuurnummer, of `FS-<id>` zonder nummer); bestaat die, dan wordt hij gekoppeld.
+- **Waarom beide:** Moneybird kent geen idempotentiesleutel. Als Moneybird de factuur aanmaakt maar het antwoord verloren
+  gaat (time-out), zou een nieuwe poging een tweede boeking maken. De unieke rij voorkomt dubbel registreren; het zoeken
+  voorkomt dubbel aanmaken.
+- **Bijlage** gaat pas na het registreren: mislukt die, dan staat de export wel (met een melding), in plaats van dat een
+  nieuwe poging een tweede factuur maakt.
+
+### B84. Mappings per pakket; grootboek en btw handmatig (met voorstel), leveranciers automatisch
+- **Wat:** `boekhoud_mappings` (per organisatie, pakket, soort en intern id). Grootboek: onze rekening → rekening in het
+  pakket. Btw: percentage → btw-code. Leverancier: bij de eerste export gezocht op KvK-nummer, btw-nummer of exacte naam,
+  anders aangemaakt (met btw-nummer, KvK-nummer en IBAN), en vastgelegd als "automatisch". Een handmatige mapping wordt nooit
+  overschreven.
+- **Ontbrekende mapping = definitieve fout** met uitleg ("Grootboekrekening 4300 Kantoorkosten is niet gekoppeld aan
+  Moneybird"): een nieuwe poging lost het niet op. Na het koppelen: badge "Export mislukt" → opnieuw proberen. Ook de
+  mail "export mislukt" (B75) gaat dan uit.
+- **Automatisch koppelen** (in de app, `stelGrootboekVoor`/`stelBtwVoor`): eerst gelijke code, dan gelijke naam, en voor
+  btw het percentage. Het is een voorstel dat direct wordt opgeslagen en daarna in de lijst te controleren en wijzigen is.
+- **Mappingwijzigingen** staan in de audit log: ze bepalen waar een boeking terechtkomt.
+- **Regels:** één boekingsregel per btw-regel (grondslag excl. btw, `prices_are_incl_tax: false`), allemaal op de
+  grootboekrekening van de factuur. Zonder btw-regels alleen als excl. = incl. (0%); anders een definitieve fout.
+
+### B85. Na export vergrendeld, ook tegen verwijderen
+- **Wat:** `facturen.geexporteerd_op` zet alleen `registreer_export`. Trigger `facturen_export_slot` weigert daarna
+  inhoudelijke wijzigingen (zelfde velden als bij betaald) en verwijderen, ook door de beheerder;
+  `btw_regels_export_slot` weigert wijzigingen aan de btw-regels. Gebruikers hebben geen kolomrecht op `geexporteerd_op`.
+  Status *betaald* zetten kan wel. Verwijderen kan alleen via de hele organisatie (cascade).
+- **Waarom:** afgesproken met de opdrachtgever (correcties via de boekhouding). Een verwijderde of gewijzigde factuur zou
+  anders niet meer overeenkomen met de boeking.
+- **UI:** `vergrendeling()` in `workflow.ts` geeft de reden (betaald of geëxporteerd); het formulier wordt dan "Bekijken" met
+  die reden, en de lijst toont "geboekt".
+
+### B86. Moneybird: welke fouten opnieuw
+- 429 (150 verzoeken per 5 minuten), 5xx en netwerkfouten → nieuwe poging via de wachtrij. 401/403 (token of scopes),
+  402 (abonnement), 404 (administratie-id) en 400/422 (validatie, bijv. afgesloten periode) → definitief, met de melding van
+  Moneybird.
+- **Niet getest tegen de echte API** (geen account bij de bouw): de verzoeken zijn opgesteld volgens de documentatie op
+  developer.moneybird.com en met unit-tests op vorm en foutafhandeling gecontroleerd. De eerste live-export in de
+  testadministratie is dus ook de eerste echte test.

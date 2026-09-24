@@ -99,8 +99,24 @@ export function mogelijkeActies(factuur: WorkflowFactuur, ctx: WorkflowContext):
     });
 }
 
-/** Mag de gebruiker de factuur verwijderen? (beheerder altijd; anders eigen factuur in gescand/afgekeurd) */
-export function magVerwijderen(factuur: Pick<Factuur, "status" | "workflow">, ctx: WorkflowContext): boolean {
+/**
+ * Waarom de factuur niet meer inhoudelijk te wijzigen is (zelfde regels als de databasetriggers), of null.
+ * Betaald = afgesloten (B38); geëxporteerd = correcties via de boekhouding (fase 4.5).
+ */
+export function vergrendeling(factuur: Pick<Factuur, "status"> & { geexporteerd_op?: string | null }): string | null {
+  if (factuur.geexporteerd_op) {
+    return "Deze factuur is geëxporteerd naar het boekhoudpakket en kan niet meer worden gewijzigd. Correcties lopen via de boekhouding.";
+  }
+  if (factuur.status === "betaald") return "Deze factuur is betaald en kan niet meer worden gewijzigd.";
+  return null;
+}
+
+/** Mag de gebruiker de factuur verwijderen? (niet na export; beheerder verder altijd; anders eigen factuur in gescand/afgekeurd) */
+export function magVerwijderen(
+  factuur: Pick<Factuur, "status" | "workflow"> & { geexporteerd_op?: string | null },
+  ctx: WorkflowContext,
+): boolean {
+  if (factuur.geexporteerd_op) return false;
   if (ctx.rol === "beheerder") return true;
   return factuur.workflow.ingevoerd_door === ctx.userId && (factuur.status === "gescand" || factuur.status === "afgekeurd");
 }

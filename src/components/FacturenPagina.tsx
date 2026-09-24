@@ -26,6 +26,7 @@ import { probeerTaakOpnieuw } from "../lib/koppelingenApi";
 import {
   FUNCTIESCHEIDING_MELDING,
   valtTerugNaGewijzigd,
+  vergrendeling,
   type MogelijkeActie,
   type WorkflowContext,
 } from "../lib/workflow";
@@ -64,6 +65,7 @@ function laadLokaleFacturen(): Factuur[] {
       koppelingen: [],
       euro: GEEN_OMREKENING,
       herkomst: "upload",
+      geexporteerd_op: null,
       codering: GEEN_CODERING,
       workflow: LEGE_WORKFLOW,
       status: "gescand",
@@ -404,6 +406,7 @@ export default function FacturenPagina({ sessie, lidmaatschap, rekeningen, gebru
   };
 
   const conceptStatus = conceptFactuur?.status ?? concept?.status ?? "gescand";
+  const conceptVergrendeling = conceptFactuur ? vergrendeling(conceptFactuur) : null;
   const wf = conceptFactuur?.workflow;
   const statusInfo = wf ? (
     <>
@@ -412,6 +415,7 @@ export default function FacturenPagina({ sessie, lidmaatschap, rekeningen, gebru
         wf.gecontroleerd_door && `gecontroleerd door ${naamVan(wf.gecontroleerd_door) ?? "onbekend"} op ${datum(wf.gecontroleerd_op)}`,
         wf.goedgekeurd_door && `goedgekeurd door ${naamVan(wf.goedgekeurd_door) ?? "onbekend"} op ${datum(wf.goedgekeurd_op)}`,
         wf.betaald_op && `betaald op ${datum(wf.betaald_op)}`,
+        conceptFactuur?.geexporteerd_op && `geëxporteerd naar de boekhouding op ${datum(conceptFactuur.geexporteerd_op)}`,
       ]
         .filter(Boolean)
         .join(" · ")}
@@ -459,7 +463,7 @@ export default function FacturenPagina({ sessie, lidmaatschap, rekeningen, gebru
           status={conceptStatus}
           statusInfo={statusInfo}
           waarschuwing={terugvalWaarschuwing}
-          alleenLezen={conceptStatus === "betaald"}
+          vergrendeld={conceptVergrendeling}
           historie={
             conceptFactuur ? (
               <HistorieTijdlijn
@@ -477,7 +481,7 @@ export default function FacturenPagina({ sessie, lidmaatschap, rekeningen, gebru
           <CoderingVeld
             codering={concept.codering}
             rekeningen={rekeningen}
-            disabled={conceptStatus === "betaald"}
+            disabled={!!conceptVergrendeling}
             onChange={(codering) => setConcept((huidig) => (huidig ? { ...huidig, codering } : huidig))}
           />
           <SignalenBlok

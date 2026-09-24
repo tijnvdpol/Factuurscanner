@@ -11,12 +11,16 @@
 //       aan de vertrouwde afzenders toegevoegd (staat in de audit log).
 // POST { actie: "testmail", organisatie_id }
 //   200 { notificatie_id, melding }  testmail aan jezelf (controller/beheerder), via Resend of mock.
+// POST { actie: "boekhouding_opties", organisatie_id }
+//   200 { pakket, naam, modus, grootboekrekeningen, btw_codes }  uit het gekozen pakket, voor de mapping
+//       (controller/beheerder). Dient ook als verbindingstest; 502 met de melding van het pakket bij een fout.
 //   4xx/5xx { error: string }
 //
 // Latere fasen voegen acties toe (verbinding testen, mapping ophalen, …).
 
 import { CORS_HEADERS, fout, gebruikerClient, json, modusVoor, serviceClient, UUID, wekWorker } from "../_shared/server.ts";
 import { koppelingOverzicht } from "../_shared/koppelingen/modus.ts";
+import { isPakket, kiesBoekhoudProvider } from "../_shared/koppelingen/boekhoudProvider.ts";
 import { verwerkMail } from "../_shared/koppelingen/mailbox.ts";
 import { maakTestmail, TEST_AFZENDER } from "../_shared/koppelingen/testmail.ts";
 
@@ -123,6 +127,27 @@ Deno.serve(async (req) => {
           ? `Testmail naar ${gebruiker.email} in de wachtrij. Hij komt binnen een minuut binnen.`
           : `Testmail (mock) in de wachtrij. Binnen een minuut staat hij onder "Meldingen → Mijn mails".`,
       });
+    }
+    case "boekhouding_opties": {
+      if (lid.rol !== "controller" && lid.rol !== "beheerder") {
+        return fout(403, "Alleen een controller of beheerder kan de koppeling met het boekhoudpakket instellen.");
+      }
+      const { data: instelling } = await client
+        .from("koppeling_instellingen")
+        .select("config")
+        .eq("organisatie_id", organisatieId)
+        .eq("koppeling", "boekhouding")
+        .maybeSingle();
+      const pakket = isPakket(instelling?.config?.provider) ? instelling.config.provider : "moneybird";
+      const modus = await modusVoor(client, organisatieId, "boekhouding");
+      try {
+        const p = kiesBoekhoudProvider(pakket, modus, (naam) => Deno.env.get(naam));
+        const [grootboekrekeningen, btwCodes] = await Promise.all([p.grootboekrekeningen(), p.btwCodes()]);
+        return json(200, { pakket, naam: p.naam, modus, grootboekrekeningen, btw_codes: btwCodes });
+      } catch (err) {
+        console.warn("Boekhoudpakket niet bereikbaar:", err);
+        return fout(502, err instanceof Error ? err.message : "Het boekhoudpakket is niet bereikbaar.");
+      }
     }
     default:
       return fout(400, "Onbekende actie.");
