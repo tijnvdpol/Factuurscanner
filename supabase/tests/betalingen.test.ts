@@ -88,8 +88,9 @@ describe("betaalbatch maken", () => {
   });
 
   it("goedgekeurd → in betaalbatch; posten met kenmerk, bedrag en omschrijving; batch-taak gepland", async () => {
-    const a = await goedgekeurd({ totaal_incl: 121.5 });
-    const b = await goedgekeurd({ totaal_incl: 50 });
+    // Posten staan op vervaldatum (daarna id): verschillende datums voor een vaste volgorde
+    const a = await goedgekeurd({ totaal_incl: 121.5, vervaldatum: "2026-10-10" });
+    const b = await goedgekeurd({ totaal_incl: 50, vervaldatum: "2026-10-20" });
     const batchId = await maakBatch([a, b]);
     expect(await status(a)).toBe("in_betaalbatch");
 

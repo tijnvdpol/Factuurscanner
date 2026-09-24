@@ -634,3 +634,40 @@ betaalbatch of na export inhoudelijk vergrendeld; de knop goedgekeurd → betaal
 - **Mock "betaalt":** in mock-modus worden facturen als betaald gemarkeerd zonder echte betaling. De pagina Betalingen toont
   dat met een gele balk en de batch met "mock", en de audit log vermeldt "mock".
 - **Weigeringen testen:** bedrag eindigt op ,13 → AC04, op ,14 → AM05 (echte SEPA-redencodes).
+
+## Fase 4.7: Power BI
+
+### B92. Views in een apart schema, met rechten van de eigenaar
+- **Wat:** vier views in `reporting` (openstaande posten, crediteurenouderdom, cashflowprognose, doorlooptijd van
+  goedkeuring). Het zijn gewone views (niet `security_invoker`): ze lezen met de rechten van hun eigenaar, dus RLS geldt
+  niet en de lezer heeft geen rechten op de tabellen nodig.
+- **Waarom:** Power BI logt rechtstreeks in op de database, niet als app-gebruiker; RLS op lidmaatschap werkt daar niet. Met
+  views bepaalt de database precies welke kolommen zichtbaar zijn (geen IBAN's van leveranciers, geen audit-details behalve
+  de afgeleide tellingen), en blijven de tabellen dicht.
+- **Geen functies uit `intern`** in de views: functies in een view draaien met de rechten van de lezer. Het bedrag in euro
+  staat daarom uitgeschreven (dezelfde regel als `intern.bedrag_in_euro`).
+- **Alle organisaties:** de views filteren niet op organisatie (er is nu één, B66); elke rij heeft `organisatie_id`.
+
+### B93. Rol reporting_lezer zonder login; de login maak je zelf
+- **Wat:** de migratie maakt `reporting_lezer` (nologin) met alleen `usage` op `reporting` en `select` op de views. De
+  login-rol met wachtwoord (`powerbi`) staat in de README en wordt niet door de migratie gemaakt; hij krijgt standaard
+  alleen-lezen transacties, een time-out van 60 s en `search_path = reporting`.
+- **Waarom:** een wachtwoord hoort niet in een migratie (die staat in git). Zo kun je ook meerdere logins maken of er één
+  intrekken zonder de rechten te wijzigen.
+
+### B94. Geen security-definerfuncties voor de lezer
+- **Wat:** een test (en test 7 van de handtest) controleert dat `reporting_lezer` geen enkele security-definerfunctie in
+  `public`, `intern` of `reporting` kan uitvoeren, en geen tabel in `public`, `auth` of `storage` kan lezen.
+- **Waarom:** wie direct op de database inlogt, kan `request.jwt.claims` zelf zetten en zo `auth.uid()` laten teruggeven wat
+  hij wil. Via een security-definerfunctie (bijv. `wijzig_status`) zou de lezer dan namens een gebruiker kunnen handelen.
+  De migraties trekken `execute` al consequent in bij `public`; de test bewaakt dat voor de toekomst.
+
+### B95. Keuzes in de berekeningen
+- **Openstaand:** status gescand, gecontroleerd, goedgekeurd of in betaalbatch (ontvangen, niet afgekeurd, niet betaald). De
+  kolom `goedgekeurd` scheidt verplichtingen die al zijn goedgekeurd van facturen die nog worden beoordeeld.
+- **Ouderdom:** op de vervaldatum (dagen erover), in de gebruikelijke klassen; zonder vervaldatum een eigen klasse.
+- **Cashflow:** verwachte betaaldatum = vervaldatum; al vervallen = vandaag (dat moet nu betaald); geen vervaldatum =
+  factuurdatum + 30 dagen (gangbare termijn). Per dag, met week en maand om te groeperen en een cumulatief totaal per organisatie.
+- **Doorlooptijd:** in uren (invoer → controle → goedkeuring) en dagen (invoer → goedkeuring, goedkeuring → betaling).
+  "Goedgekeurd via" en "keren afgekeurd" komen uit de audit log (daarvoor een partiële index op statuswijzigingen).
+  Na een terugval naar gescand telt de laatste controle; de eerste invoer blijft het beginpunt.

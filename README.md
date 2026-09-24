@@ -26,7 +26,7 @@ met rollen, een goedkeuringsworkflow met functiescheiding, een audit trail en ko
 | `supabase/functions/mail-actie/` | Knoppen Goedkeuren/Afkeuren uit een goedkeuringsmail (ondertekend, eenmalig token) |
 | `supabase/functions/_shared/geminiScan.ts` | Gemini-scan met modelkeuze en fallback (gedeeld door scan-factuur en de mailbox) |
 | `supabase/functions/_shared/koppelingen/` | Gedeelde, testbare logica van de koppelingen (modus, taken, adapters) |
-| `supabase/handtests/` | Testscripts voor de SQL Editor (`fase1_rls.sql`, `fase2_3_workflow.sql`, `fase4_1_koppelingen.sql` t/m `fase4_6_betalingen.sql`) |
+| `supabase/handtests/` | Testscripts voor de SQL Editor (`fase1_rls.sql`, `fase2_3_workflow.sql`, `fase4_1_koppelingen.sql` t/m `fase4_7_reporting.sql`) |
 | `supabase/tests/` | Geautomatiseerde databasetests (Vitest + PGlite, geen Docker nodig) |
 | `src/lib/veldvalidatie.ts`, `signalen.ts`, `workflow.ts`, `codering.ts`, `audit.ts` | Pure functies (validatie, signaalregels, statusregels, coderingsvoorstel, leesbare audit log) |
 | `docs/beslissingen.md` | Ontwerpbeslissingen (stap 2 en 3, koppelingen) |
@@ -118,7 +118,7 @@ pagina Koppelingen laat zien welke secrets voor live nog ontbreken (alleen de na
 | E-mailnotificaties | `EMAIL` | Resend-account (gratis plan) + eigen domein + `RESEND_API_KEY`, `MAIL_AFZENDER`, `APP_URL` | fase 4.4 ✅ |
 | Boekhoudpakket | `BOEKHOUDING` | Moneybird (testadministratie) + `MONEYBIRD_TOKEN`, `MONEYBIRD_ADMINISTRATIE_ID` | fase 4.5 ✅ |
 | Betaalopdrachten | `BETALING` | niets (live = SEPA-bestand downloaden) | fase 4.6 ✅ |
-| Power BI | – | Power BI Desktop + een rapportagerol | fase 4.7 |
+| Power BI | – | Power BI Desktop + een login-rol voor rapportages | fase 4.7 ✅ |
 
 Mislukt een koppeling, dan probeert de wachtrij het automatisch opnieuw (na 1 min, 5 min, 30 min, 2 uur en 12 uur). In
 de factuurlijst verschijnt dan een badge, bijv. "VIES: nieuwe poging om 14:05" of "Export mislukt" (klik om het meteen
@@ -384,6 +384,60 @@ echte bank-API aan te sluiten.
 6. **Controleren:** draai `supabase/handtests/fase4_6_betalingen.sql` (verwacht: `GESLAAGD: alle 9 tests ok`). Upload het
    eerste bestand bij je bank eerst als test (de meeste banken tonen een controle vóór het versturen).
 
+### Power BI (fase 4.7)
+
+Power BI leest live uit de database, via vier views in het schema **`reporting`**. Alle bedragen staan in euro (bij vreemde
+valuta de ECB-omrekening; zonder koers blijft het bedrag leeg en wordt het apart geteld). "Vandaag" is de datum in
+Nederland.
+
+| View | Wat | Per |
+|---|---|---|
+| `reporting.openstaande_posten` | Ontvangen facturen die nog niet betaald of afgekeurd zijn: bedrag, status, vervaldatum, dagen over de vervaldatum en ouderdomsklasse | factuur |
+| `reporting.crediteurenouderdom` | Openstaand bedrag per ouderdomsklasse: niet vervallen, 1–30, 31–60, 61–90, > 90 dagen, geen vervaldatum | leverancier |
+| `reporting.cashflowprognose` | Verwachte uitgaven op de vervaldatum (al vervallen = vandaag; geen vervaldatum = factuurdatum + 30), goedgekeurd vs. nog te keuren, in betaalbatch, cumulatief | dag (met week en maand) |
+| `reporting.doorlooptijd_goedkeuring` | Uren/dagen van invoer tot controle en goedkeuring, en van goedkeuring tot betaling; wie controleerde en goedkeurde, via app of e-mail, hoe vaak afgekeurd | goedgekeurde factuur |
+
+Elke view heeft `organisatie_id` en `organisatie` om op te filteren.
+
+**Toegang:** de migratie maakt de rol **`reporting_lezer`** (zonder login). Die mag alleen deze views lezen: geen tabellen,
+geen `auth.users` en geen databasefuncties. Power BI logt in met een eigen login-rol die lid is van `reporting_lezer`.
+De views tonen de gegevens van alle organisaties in de database (er is nu één); geef deze login dus alleen aan wie alles
+mag zien.
+
+**Instellen:**
+
+1. Migratie `20260924160000_reporting.sql` uitvoeren.
+2. **Login-rol maken** (SQL Editor; kies een eigen, sterk wachtwoord en bewaar het in je wachtwoordkluis):
+   ```sql
+   create role powerbi login password '<sterk wachtwoord>' in role reporting_lezer;
+   alter role powerbi set default_transaction_read_only = on;
+   alter role powerbi set statement_timeout = '60s';
+   alter role powerbi set search_path = reporting;
+   ```
+   Draai daarna `supabase/handtests/fase4_7_reporting.sql` (verwacht: `GESLAAGD: alle 9 tests ok`). Test 9 controleert ook
+   deze login-rol.
+3. **Verbindingsgegevens** in Supabase: *Connect* (bovenaan het project) → *Session pooler*. Gebruik de **session pooler**
+   (poort 5432), niet de directe verbinding: die is op het gratis plan alleen via IPv6 bereikbaar. Je ziet iets als
+   `aws-0-eu-central-1.pooler.supabase.com`. De gebruikersnaam is `powerbi.<project-ref>` (de rolnaam, een punt en de
+   project-ref).
+4. **Power BI Desktop:** *Gegevens ophalen* → *Database* → **PostgreSQL-database**.
+   - Server: `aws-0-eu-central-1.pooler.supabase.com:5432` (je eigen host uit stap 3)
+   - Database: `postgres`
+   - Gegevensconnectiviteitsmodus: *Importeren* (snel, vernieuwen op schema), of *DirectQuery* (altijd actueel, trager)
+   - Aanmelden: tabblad *Database*, gebruiker `powerbi.<project-ref>`, het wachtwoord uit stap 2
+   - Kies in de navigator de vier views onder `reporting`.
+5. **Tip:** sorteer `ouderdom` in Power BI op `ouderdom_volgorde` (*Kolomhulpmiddelen → Sorteren op kolom*), zodat de klassen
+   in de goede volgorde staan.
+
+**Problemen:**
+- *Certificaatfout ("The remote certificate is invalid")*: download het certificaat in Supabase (*Project Settings →
+  Database → SSL Configuration → Download certificate*) en importeer het in Windows bij *Vertrouwde basiscertificerings-
+  instanties* (`certmgr.msc` → rechtsklik → *Alle taken → Importeren*). Start Power BI Desktop daarna opnieuw.
+- *Time-out of "host niet gevonden"*: controleer dat je de session pooler gebruikt (IPv4) en poort 5432.
+- *"permission denied"* op een tabel: klopt. Alleen de views in `reporting` zijn leesbaar.
+- Automatisch vernieuwen in de Power BI-service (online) vraagt een on-premises gegevensgateway of een cloudverbinding
+  met dezelfde gegevens. In Power BI Desktop werkt *Vernieuwen* direct.
+
 ## Beveiliging
 
 - Elke tabel heeft RLS op lidmaatschap van de organisatie (`is_lid`/`heeft_rol`). `btw_regels` wordt beveiligd via de bijbehorende factuur.
@@ -395,6 +449,8 @@ echte bank-API aan te sluiten.
 - Koppelingen: Edge Functions met de service-rolsleutel wijzigen facturen alleen via databasefuncties die dezelfde controles
   doen als de app. De service role kan de status niet rechtstreeks wijzigen (trigger). De worker is alleen aan te roepen met
   `WORKER_GEHEIM`; de takenwachtrij is voor gebruikers alleen-lezen.
+- Power BI: de rol `reporting_lezer` leest alleen de views in `reporting`; geen tabellen en geen functies die met rechten
+  van de eigenaar draaien (een directe databaselogin kan zelf een JWT-claim zetten, dus dat is bewust dichtgezet en getest).
 - Een factuur in een betaalbatch is vergrendeld; de status "in betaalbatch" en "betaald via de bank" zetten alleen de
   betaalfuncties in de database. De controles op IBAN en bedrag staan in de database, niet alleen in de app.
 - Na export naar het boekhoudpakket is een factuur vergrendeld en niet te verwijderen (trigger + kolomrechten); het
