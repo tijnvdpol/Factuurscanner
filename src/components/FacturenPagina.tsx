@@ -33,6 +33,7 @@ import { downloadCsv } from "../lib/csv";
 import {
   alleenFactuurData,
   GEEN_CODERING,
+  GEEN_OMREKENING,
   LEGE_WORKFLOW,
   STATUS_LABELS,
   legeFactuurData,
@@ -61,6 +62,7 @@ function laadLokaleFacturen(): Factuur[] {
       leverancier_iban: null,
       signalen: [],
       koppelingen: [],
+      euro: GEEN_OMREKENING,
       codering: GEEN_CODERING,
       workflow: LEGE_WORKFLOW,
       status: "gescand",

@@ -5,7 +5,10 @@
 //   - elke andere fout: tijdelijk (netwerk, 5xx, time-out) → nieuwe poging met oplopende wachttijd.
 
 export class DefinitieveFout extends Error {
-  override name = "DefinitieveFout";
+  constructor(melding: string) {
+    super(melding);
+    this.name = "DefinitieveFout";
+  }
 }
 
 export interface Taak {

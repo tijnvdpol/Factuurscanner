@@ -41,6 +41,12 @@ describe("modus per koppeling", () => {
     // Nooit waarden van secrets in het overzicht
     expect(JSON.stringify(overzicht)).not.toContain("geheim");
   });
+
+  it("KvK in de testomgeving heeft geen eigen sleutel nodig", () => {
+    const env: Record<string, string> = { KOPPELING_KVK_MODUS: "live", KVK_OMGEVING: "Test" };
+    const kvk = koppelingOverzicht((naam) => env[naam], []).find((k) => k.koppeling === "kvk");
+    expect(kvk).toMatchObject({ modus: "live", ontbrekend: [], klaar: true });
+  });
 });
 
 describe("taak uitvoeren", () => {

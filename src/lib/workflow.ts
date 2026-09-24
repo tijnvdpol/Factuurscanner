@@ -42,7 +42,13 @@ export interface MogelijkeActie {
   geblokkeerd: string | null;
 }
 
-type WorkflowFactuur = Pick<Factuur, "status" | "totaal_incl" | "signalen" | "codering" | "workflow">;
+type WorkflowFactuur = Pick<Factuur, "status" | "totaal_incl" | "valuta" | "euro" | "signalen" | "codering" | "workflow">;
+
+/** Bedrag in euro dat telt voor de goedkeuringslimiet; null = (nog) onbekend. Zelfde regel als intern.bedrag_in_euro. */
+export function bedragInEuro(factuur: Pick<Factuur, "totaal_incl" | "valuta" | "euro">): number | null {
+  const valuta = (factuur.valuta ?? "EUR").trim().toUpperCase();
+  return valuta === "EUR" ? factuur.totaal_incl : factuur.euro.bedrag;
+}
 
 export function euro(bedrag: number): string {
   return `€ ${formatBedrag(bedrag, Number.isInteger(bedrag) ? 0 : 2)}`;
@@ -59,7 +65,9 @@ export function goedkeurBlokkade(factuur: WorkflowFactuur, ctx: WorkflowContext)
   }
   if (ctx.goedkeuringslimiet !== null) {
     if (factuur.totaal_incl === null) return "Totaalbedrag ontbreekt";
-    if (factuur.totaal_incl > ctx.goedkeuringslimiet) {
+    const inEuro = bedragInEuro(factuur);
+    if (inEuro === null) return "Wisselkoers nog niet bekend (wordt opgehaald)";
+    if (inEuro > ctx.goedkeuringslimiet) {
       return `Boven je goedkeuringslimiet van ${euro(ctx.goedkeuringslimiet)}`;
     }
   }

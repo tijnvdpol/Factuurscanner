@@ -108,9 +108,9 @@ pagina Koppelingen laat zien welke secrets voor live nog ontbreken (alleen de na
 | Koppeling | `<NAAM>` | Nodig voor live | Status |
 |---|---|---|---|
 | Basis (wachtrij, retries) | – | `WORKER_GEHEIM` + 2 Vault-secrets (zie hieronder) | fase 4.1 ✅ |
-| Verrijken: VIES | `VIES` | niets (gratis EU-API) | fase 4.2 |
-| Verrijken: ECB-wisselkoersen | `ECB` | niets (gratis API) | fase 4.2 |
-| Verrijken: KvK | `KVK` | `KVK_API_KEY` | fase 4.2 |
+| Verrijken: VIES | `VIES` | niets (gratis EU-API) | fase 4.2 ✅ |
+| Verrijken: ECB-wisselkoersen | `ECB` | niets (gratis API) | fase 4.2 ✅ |
+| Verrijken: KvK | `KVK` | `KVK_API_KEY` (productie), of `KVK_OMGEVING=test` zonder sleutel | fase 4.2 ✅ |
 | Mailbox-import | `MAILBOX` | Mailgun-account (gratis plan) + `MAILGUN_SIGNING_KEY` | fase 4.3 |
 | E-mailnotificaties | `EMAIL` | Resend-account + `RESEND_API_KEY`, `MAIL_AFZENDER`, `APP_URL` | fase 4.4 |
 | Boekhoudpakket | `BOEKHOUDING` | Moneybird + `MONEYBIRD_TOKEN`, `MONEYBIRD_ADMINISTRATIE_ID` | fase 4.5 |
@@ -148,6 +148,42 @@ Eenmalig, in deze volgorde:
    - In de app (als controller of beheerder): **Koppelingen → Test de wachtrij**. Binnen een minuut staat de testtaak op
      *Gelukt*. Blijft hij op *In wachtrij* staan, controleer dan stap 3 en 4 (zelfde geheim?) en of de cronjob bestaat:
      `select * from cron.job;` en `select * from cron.job_run_details order by start_time desc limit 5;`.
+
+### Verrijken: VIES, ECB en KvK (fase 4.2)
+
+Bij elke opgeslagen factuur plant de database de controles in; de worker voert ze uit:
+
+- **VIES** (btw-nummer uit een EU-land): geldig of ongeldig volgens de Europese Commissie, met tijdstip. Het resultaat blijft
+  30 dagen geldig (daarna bij een nieuwe factuur opnieuw). Ongeldig → waarschuwing *Btw-nummer ongeldig (VIES)*. Is VIES
+  tijdelijk druk (`MS_MAX_CONCURRENT_REQ`, `MS_UNAVAILABLE`), dan volgt automatisch een nieuwe poging.
+- **ECB** (factuur in vreemde valuta): omrekening naar euro met de ECB-referentiekoers op de factuurdatum (weekend of feestdag:
+  de laatste publicatie ervóór). Koers, koersdatum en bron staan op de factuur; in de lijst staat "≈ € …". De
+  **goedkeuringslimiet** geldt voor het bedrag in euro; zolang de koers ontbreekt, is goedkeuren met een limiet geblokkeerd.
+- **KvK** (KvK-nummer op de factuur, nieuw of langer dan 90 dagen niet gecontroleerd): bedrijfsgegevens ophalen en vergelijken
+  met de naam op de factuur (rechtsvorm, hoofdletters en leestekens tellen niet; handelsnamen tellen mee). Niet gevonden,
+  uitgeschreven of een andere naam → waarschuwing *Afwijking KvK*.
+
+**Instellen:**
+
+1. Migratie `20260924110000_verrijking.sql` uitvoeren. Die plant ook controles in voor bestaande facturen.
+2. `verwerk-taken` opnieuw deployen: `npx.cmd supabase functions deploy verwerk-taken --use-api --project-ref <project-ref>`
+3. Per koppeling de modus kiezen (pagina Koppelingen, of `KOPPELING_VIES_MODUS` / `KOPPELING_ECB_MODUS` / `KOPPELING_KVK_MODUS`):
+   - **VIES en ECB live:** geen account of sleutel nodig.
+   - **KvK live, testomgeving** (fictieve bedrijven, geen account): secret `KVK_OMGEVING=test`. Testnummers zijn o.a. 68750110
+     ("Test BV Donald") en 69599084. Echte leveranciers geven hier "niet gevonden".
+   - **KvK live, productie:** abonnement op de KvK API's (developers.kvk.nl, Basisprofiel API) en secret `KVK_API_KEY`.
+     Laat `KVK_OMGEVING` dan weg.
+4. Controleren: draai `supabase/handtests/fase4_2_verrijking.sql` (verwacht: `GESLAAGD: alle 9 tests ok`) en sla een factuur
+   op met valuta USD, een btw-nummer en een KvK-nummer. Binnen een minuut staat "≈ € …" in de lijst en staan de resultaten
+   in de historie van de factuur.
+
+**Mock-modus** (standaard), zonder internet:
+
+| Koppeling | Gedrag |
+|---|---|
+| VIES | nummer eindigt op `99` → ongeldig; op `98` → VIES tijdelijk niet bereikbaar (test de retries); anders geldig |
+| ECB | vaste koersen (USD 1,1622, GBP 0,8641, CHF 0,9362, JPY 178,86, …); weekend → koers van vrijdag; onbekende valuta → mislukt |
+| KvK | 68750110, 12345678 en 87654321 (uitgeschreven) zijn vaste testbedrijven; eindigt op `00` → niet gevonden, op `99` → uitgeschreven, op `98` → andere naam; anders dezelfde naam als op de factuur |
 
 ## Beveiliging
 

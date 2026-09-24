@@ -315,3 +315,65 @@ betaalbatch of na export inhoudelijk vergrendeld; de knop goedgekeurd → betaal
   historie van de factuur.
 - **Opnieuw proberen:** elk lid mag dat; de taak zelf controleert opnieuw of de actie is toegestaan.
 
+## Fase 4.2: verrijken en controleren
+
+### B59. Resultaten in een tabel, signalen via bepaal_signalen
+- **Wat:** VIES- en KvK-resultaten staan in `verificaties` (per organisatie, soort en nummer; het laatste resultaat, met tijdstip
+  en bron live/mock). `bepaal_signalen` leest die tabel en maakt de signalen `btw_vies_ongeldig` en `kvk_afwijking`
+  (waarschuwing). Een nieuw resultaat bepaalt de signalen opnieuw voor alle niet-betaalde facturen met dat nummer.
+- **Waarom:** `bepaal_signalen` verwijdert bij elke save open signalen die niet in de nieuwe set zitten (B11). Een los
+  weggeschreven VIES-signaal zou dus bij de volgende save verdwijnen. Opgeloste signalen blijven staan (zelfde sleutel).
+- **Historie:** wijzigingen in `verificaties` staan in de audit log (bron vies/kvk, systeem); de uitkomst van de taak staat in
+  de historie van de factuur waarvoor de controle werd aangevraagd.
+
+### B60. Controles per nummer, met een geldigheid
+- **Wat:** VIES per btw-nummer (30 dagen geldig), KvK per KvK-nummer (90 dagen). Alleen bij een geldig formaat, en VIES alleen
+  voor EU-landen (`EL` voor Griekenland, `XI` voor Noord-Ierland). Een nieuwe factuur met een recent gecontroleerd nummer
+  krijgt direct de signalen, zonder nieuwe aanvraag.
+- **Waarom:** de opdracht noemt "bij een nieuwe leverancier" voor KvK; een nieuw of lang niet gecontroleerd nummer dekt dat,
+  ook als een bekende leverancier een ander KvK-nummer gaat gebruiken. VIES is gratis maar vaak druk; dus niet bij elke save.
+
+### B61. Bedrag in euro op de factuur, de koers alleen via de worker
+- **Wat:** kolommen `bedrag_eur`, `koers`, `koers_datum` en `koers_bron`. Trigger `facturen_euro`: bij EUR is `bedrag_eur` het
+  totaal; bij vreemde valuta wordt alles leeggemaakt zodra valuta, totaal of factuurdatum wijzigt, en plant een AFTER-trigger
+  een ecb-taak. Alleen `verwerk_wisselkoers` (security definer, service role) vult de koers in, en alleen als valuta en datum
+  nog kloppen (anders is de factuur intussen gewijzigd).
+- **Waarom:** anders kan iemand via de API (of met de service role) een lager bedrag in euro zetten en zo de limiet omzeilen.
+- **Koers:** ECB-referentiekoers van de laatste publicatie op of vóór de factuurdatum (maximaal 10 dagen terug); zonder
+  factuurdatum de aanmaakdatum. Een factuurdatum in de toekomst krijgt de laatst beschikbare koers. De cache `wisselkoersen`
+  wordt alleen gebruikt voor een koers van precies dezelfde datum.
+- **Terugval:** `bedrag_eur` hoort niet bij de velden die een gecontroleerde factuur terugzetten naar gescand (het is afgeleid).
+- **Backfill:** bestaande euro-facturen krijgen `bedrag_eur` = totaal (dat staat als systeemwijziging in de audit log); voor
+  bestaande facturen in vreemde valuta wordt een ecb-taak gepland.
+
+### B62. Goedkeuringslimiet en "net onder limiet" in euro (strenger dan voorheen)
+- **Wat:** bij vreemde valuta telt `bedrag_eur`. Ontbreekt de koers nog en heeft de goedkeurder een limiet, dan is goedkeuren
+  geblokkeerd ("De wisselkoers voor USD is nog niet bekend…"). Zonder limiet kan goedkeuren wel.
+- **Waarom:** afgesproken met de opdrachtgever. Voorheen werd "USD 6.000" als 6.000 vergeleken met een limiet in euro, en was
+  "JPY 700.000" altijd boven elke limiet.
+- **UI:** `workflow.ts` (`bedragInEuro`) toont dezelfde blokkade als reden bij de knop; de lijst toont "≈ € …" of "koers volgt".
+  De voorproef "net onder limiet" in het formulier geldt alleen voor euro; bij vreemde valuta bepaalt de database dat na de koers.
+
+### B63. Bedrijfsnamen vergelijken in SQL
+- **Wat:** `intern.normaliseer_bedrijfsnaam`: kleine letters, zonder accenten, leestekens en rechtsvormen (B.V., N.V., V.O.F.,
+  C.V., GmbH, Ltd, …). Overeenkomst = gelijk, of de ene naam bevat de andere (minimaal 4 tekens). Naam, statutaire naam en
+  alle handelsnamen tellen mee.
+- **Waarom:** de naam op een factuur is vaak een handelsnaam of staat er zonder rechtsvorm; een strikte vergelijking geeft te
+  veel waarschuwingen. De vergelijking staat in `bepaal_signalen` (SQL is leidend, B9), zodat een gewijzigde naam op de
+  factuur meteen een ander resultaat geeft zonder nieuwe KvK-aanvraag.
+
+### B64. KvK live via de testomgeving of productie
+- **Wat:** `KVK_OMGEVING=test` gebruikt `https://api.kvk.nl/test/api` met de openbare testsleutel die de KvK zelf publiceert
+  (dus geen secret nodig); anders productie met `KVK_API_KEY`. De pagina Koppelingen houdt daar rekening mee.
+- **Let op:** de testomgeving kent alleen fictieve bedrijven; een echte leverancier geeft daar "niet gevonden" (en dus een
+  waarschuwing). Gebruik de testomgeving om de koppeling te testen, niet voor echte facturen.
+
+### B65. Tijdelijke vs. definitieve fouten per dienst
+- VIES: `MS_UNAVAILABLE`, `TIMEOUT`, `*_MAX_CONCURRENT_REQ`, HTTP 5xx en netwerkfouten → nieuwe poging. Tijdens de bouw gaf de
+  Nederlandse VIES-dienst live `MS_MAX_CONCURRENT_REQ`; zo'n melding komt dus echt voor.
+- ECB: 404 voor een datum van vandaag of gisteren → nieuwe poging (koers nog niet gepubliceerd); voor een oudere datum of een
+  onbekende valuta → definitief.
+- KvK: 404 = "niet gevonden" (een resultaat, geen fout); 401/403 → definitief (sleutel of abonnement); 5xx → nieuwe poging.
+- Rooktest tegen de echte diensten (24-09-2026): VIES (geldig en ongeldig NL-nummer), ECB (USD op een zaterdag → koers van
+  vrijdag; onbekende valuta → definitief) en de KvK-testomgeving (68750110 gevonden, onbekend nummer → niet gevonden).
+

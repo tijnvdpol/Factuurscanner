@@ -12,7 +12,7 @@
 
 import { fout, json, serviceClient } from "../_shared/server.ts";
 import { gelijkGeheim, type Taak, voerTaakUit } from "../_shared/koppelingen/taken.ts";
-import { HANDLERS } from "./handlers.ts";
+import { maakHandlers } from "./handlers.ts";
 
 // Edge Functions hebben een maximale looptijd; binnen dit budget nieuwe taken claimen.
 const TIJDBUDGET_MS = 90_000;
@@ -26,9 +26,10 @@ Deno.serve(async (req) => {
   }
 
   const supabase = serviceClient();
+  const handlers = maakHandlers(supabase);
   // Alleen soorten claimen waarvoor deze versie van de functie een verwerking heeft. Zo blijven taken
   // van een nog niet gedeployde fase gewoon in de wachtrij staan.
-  const soorten = Object.keys(HANDLERS);
+  const soorten = Object.keys(handlers);
   let gelukt = 0;
   let mislukt = 0;
 
@@ -43,7 +44,7 @@ Deno.serve(async (req) => {
 
     await Promise.all(
       taken.map(async (taak) => {
-        const afronding = await voerTaakUit(taak, HANDLERS);
+        const afronding = await voerTaakUit(taak, handlers);
         if (afronding.gelukt) gelukt++;
         else {
           mislukt++;

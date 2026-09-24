@@ -17,6 +17,8 @@ export interface KoppelingInfo {
   secrets: string[];
   /** Wat "live" voor deze koppeling betekent, als dat niet vanzelf spreekt. */
   live?: string;
+  /** Als de benodigde secrets afhangen van andere env-variabelen (anders: secrets). */
+  vereist?: (env: (naam: string) => string | undefined) => string[];
 }
 
 export const KOPPELING_INFO: Record<Koppeling, KoppelingInfo> = {
@@ -39,6 +41,8 @@ export const KOPPELING_INFO: Record<Koppeling, KoppelingInfo> = {
     naam: "KvK",
     omschrijving: "Haalt bedrijfsgegevens van nieuwe leveranciers op en vergelijkt ze met de factuur.",
     secrets: ["KVK_API_KEY"],
+    live: "De KvK-API (productie), of met KVK_OMGEVING=test de testomgeving van de KvK (fictieve bedrijven, geen sleutel nodig).",
+    vereist: (env) => (env("KVK_OMGEVING")?.trim().toLowerCase() === "test" ? [] : ["KVK_API_KEY"]),
   },
   boekhouding: {
     naam: "Boekhoudpakket",
@@ -105,7 +109,8 @@ export function koppelingOverzicht(
   return KOPPELINGEN.map((koppeling) => {
     const instelling = instellingen.find((i) => i.koppeling === koppeling);
     const { modus, vastgezet } = effectieveModus(env(envNaamModus(koppeling)), instelling?.modus);
-    const ontbrekend = KOPPELING_INFO[koppeling].secrets.filter((naam) => !env(naam)?.trim());
+    const info = KOPPELING_INFO[koppeling];
+    const ontbrekend = (info.vereist ? info.vereist(env) : info.secrets).filter((naam) => !env(naam)?.trim());
     return {
       koppeling,
       modus,

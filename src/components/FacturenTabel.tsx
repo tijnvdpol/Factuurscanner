@@ -133,6 +133,18 @@ export default function FacturenTabel({
                     <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-slate-800">
                       {f.totaal_incl !== null && f.valuta && f.valuta !== "EUR" ? `${f.valuta} ` : ""}
                       {formatBedrag(f.totaal_incl)}
+                      {f.totaal_incl !== null && f.valuta && f.valuta !== "EUR" && (
+                        <span
+                          className="block text-xs text-slate-400"
+                          title={
+                            f.euro.koers !== null
+                              ? `Koers ${f.euro.koers.toLocaleString("nl-NL")} per euro, ${f.euro.koers_datum} (${f.euro.bron === "ecb" ? "ECB" : "mock"})`
+                              : "De wisselkoers wordt opgehaald"
+                          }
+                        >
+                          {f.euro.bedrag !== null ? `≈ € ${formatBedrag(f.euro.bedrag)}` : "koers volgt"}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-2.5">
                       {ongeldig ? (

@@ -38,6 +38,8 @@ export const SIGNAAL_TYPES = [
   "rond_bedrag",
   "net_onder_limiet",
   "validatiefout",
+  "btw_vies_ongeldig",
+  "kvk_afwijking",
 ] as const;
 export type SignaalType = (typeof SIGNAAL_TYPES)[number];
 export type SignaalErnst = "info" | "waarschuwing" | "kritiek";
@@ -87,9 +89,22 @@ export interface Factuur extends FactuurData {
   ai_model: string | null;
   aangemaaktOp: string;
   workflow: Workflow;
+  euro: EuroOmrekening;
   /** Laatste taak per koppeling (VIES, export, …); leeg als er niets loopt of de status niet geladen kon worden. */
   koppelingen: KoppelingTaakStatus[];
 }
+
+/** Omrekening naar euro (ECB-koers). Bij EUR is bedrag gelijk aan het totaal en is er geen koers. */
+export interface EuroOmrekening {
+  /** null = de koers is (nog) niet bekend */
+  bedrag: number | null;
+  /** eenheden vreemde valuta per 1 euro */
+  koers: number | null;
+  koers_datum: string | null;
+  bron: "ecb" | "mock" | null;
+}
+
+export const GEEN_OMREKENING: EuroOmrekening = { bedrag: null, koers: null, koers_datum: null, bron: null };
 
 /** Wie deed wat in de statusworkflow (user-id's en tijdstippen). */
 export interface Workflow {

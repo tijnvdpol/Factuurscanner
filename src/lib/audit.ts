@@ -73,6 +73,7 @@ export const TABEL_LABELS: Record<string, string> = {
   organisatie_leden: "Lid",
   koppeling_instellingen: "Koppeling",
   koppeling_taken: "Koppelingstaak",
+  verificaties: "Verificatie",
 };
 
 export const VELD_LABELS: Record<string, string> = {
@@ -118,11 +119,26 @@ export const VELD_LABELS: Record<string, string> = {
   koppeling: "Koppeling",
   modus: "Modus",
   config: "Instellingen",
+  bedrag_eur: "Bedrag in euro",
+  koers: "Wisselkoers",
+  koers_datum: "Koersdatum",
+  koers_bron: "Bron koers",
+  uitkomst: "Uitkomst",
+  bron: "Bron",
+  opgevraagd_op: "Opgevraagd op",
+};
+
+const UITKOMST_LABELS: Record<string, string> = {
+  geldig: "geldig",
+  ongeldig: "ongeldig",
+  gevonden: "gevonden",
+  niet_gevonden: "niet gevonden",
+  uitgeschreven: "uitgeschreven",
 };
 
 const GEBRUIKER_VELDEN = new Set(["gecontroleerd_door", "goedgekeurd_door", "opgelost_door", "user_id"]);
-const BEDRAG_VELDEN = new Set(["bedrag_excl", "totaal_incl", "grondslag", "btw_bedrag", "goedkeuringslimiet"]);
-const TIJD_VELDEN = new Set(["gecontroleerd_op", "goedgekeurd_op", "betaald_op", "opgelost_op", "created_at"]);
+const BEDRAG_VELDEN = new Set(["bedrag_excl", "totaal_incl", "grondslag", "btw_bedrag", "goedkeuringslimiet", "bedrag_eur"]);
+const TIJD_VELDEN = new Set(["gecontroleerd_op", "goedgekeurd_op", "betaald_op", "opgelost_op", "created_at", "opgevraagd_op"]);
 // Technische velden die in de tijdlijn niets toevoegen
 const VERBORGEN_VELDEN = new Set(["id", "organisatie_id", "factuur_id", "created_at", "updated_at", "sleutel", "details", "leverancier_id",
   "bijgewerkt_door", "bijgewerkt_op"]);
@@ -147,6 +163,8 @@ export function formatWaarde(veld: string, waarde: unknown, ctx: WeergaveContext
   if (veld === "grootboekrekening_id" && typeof waarde === "string") return ctx.rekeningNaam(waarde) ?? "onbekende rekening";
   if (veld === "status" && typeof waarde === "string") return STATUS_LABELS[waarde as FactuurStatus] ?? waarde;
   if (veld === "rol" && typeof waarde === "string") return ROL_LABELS[waarde as Rol] ?? waarde;
+  if (veld === "uitkomst" && typeof waarde === "string") return UITKOMST_LABELS[waarde] ?? waarde;
+  if (veld === "koers_bron" && typeof waarde === "string") return waarde === "ecb" ? "ECB" : waarde;
   if (veld === "koppeling" && typeof waarde === "string") return KOPPELING_INFO[waarde as Koppeling]?.naam ?? waarde;
   if (veld === "modus" && typeof waarde === "string") return waarde === "live" ? "Live" : waarde === "mock" ? "Mock" : waarde;
   if (veld === "type" && typeof waarde === "string") return SIGNAAL_LABELS[waarde as keyof typeof SIGNAAL_LABELS] ?? waarde;
@@ -209,6 +227,11 @@ export function omschrijving(regel: AuditRegel, ctx: WeergaveContext): string {
   if (regel.tabel === "organisatie_leden" && regel.record_id) {
     const wie = ctx.naamVan(regel.record_id) ?? "gebruiker";
     return `${tabel} ${wie} ${ACTIE_LABELS[regel.actie].toLowerCase()}`;
+  }
+  if (regel.tabel === "verificaties" && typeof rij.soort === "string") {
+    const wat = rij.soort === "vies" ? "VIES" : "KvK";
+    const uitkomst = typeof regel.nieuw?.uitkomst === "string" ? `: ${formatWaarde("uitkomst", regel.nieuw.uitkomst, ctx)}` : "";
+    return `Controle ${wat}${typeof rij.sleutel === "string" ? ` ${rij.sleutel}` : ""}${uitkomst}`;
   }
   if (regel.tabel === "koppeling_instellingen" && typeof rij.koppeling === "string") {
     return `${tabel} ${formatWaarde("koppeling", rij.koppeling, ctx)} ${ACTIE_LABELS[regel.actie].toLowerCase()}`;

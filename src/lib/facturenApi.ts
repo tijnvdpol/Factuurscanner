@@ -25,7 +25,7 @@ export class DbError extends Error {
 const SELECT = `
   id, leverancier_naam, factuurnummer, factuurdatum, vervaldatum, valuta, bedrag_excl, totaal_incl,
   status, bestand_pad, bestandsnaam, ai_model, created_at, iban, btw_nummer, kvk_nummer,
-  grootboekrekening_id, codering_bron, codering_zekerheid,
+  grootboekrekening_id, codering_bron, codering_zekerheid, bedrag_eur, koers, koers_datum, koers_bron,
   user_id, gecontroleerd_door, gecontroleerd_op, goedgekeurd_door, goedgekeurd_op, betaald_op, afkeur_reden,
   leverancier:leveranciers!facturen_leverancier_fk ( iban ),
   btw_regels!btw_regels_factuur_id_fkey ( volgorde, tarief, grondslag, btw_bedrag ),
@@ -54,6 +54,10 @@ interface FactuurRij {
   grootboekrekening_id: string | null;
   codering_bron: CoderingBron | null;
   codering_zekerheid: number | string | null;
+  bedrag_eur: number | string | null;
+  koers: number | string | null;
+  koers_datum: string | null;
+  koers_bron: "ecb" | "mock" | null;
   user_id: string | null;
   gecontroleerd_door: string | null;
   gecontroleerd_op: string | null;
@@ -111,6 +115,12 @@ function naarFactuur(rij: FactuurRij): Factuur {
       goedgekeurd_op: rij.goedgekeurd_op,
       betaald_op: rij.betaald_op,
       afkeur_reden: rij.afkeur_reden,
+    },
+    euro: {
+      bedrag: getal(rij.bedrag_eur),
+      koers: getal(rij.koers),
+      koers_datum: rij.koers_datum,
+      bron: rij.koers_bron,
     },
     koppelingen: [],
   };
