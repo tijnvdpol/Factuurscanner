@@ -6,17 +6,20 @@ import {
   FILTERS,
   filterFacturen,
   magVerwijderen,
+  vergrendeling,
   mogelijkeActies,
   type Filter,
   type MogelijkeActie,
   type WorkflowContext,
 } from "../lib/workflow";
 import SignaalBadges from "./SignaalBadges";
+import KoppelingBadges from "./KoppelingBadges";
 
 const STATUS_KLASSEN: Record<FactuurStatus, string> = {
   gescand: "bg-slate-100 text-slate-600",
   gecontroleerd: "bg-sky-100 text-sky-700",
   goedgekeurd: "bg-indigo-100 text-indigo-700",
+  in_betaalbatch: "bg-violet-100 text-violet-700",
   betaald: "bg-emerald-100 text-emerald-700",
   afgekeurd: "bg-red-100 text-red-700",
 };
@@ -29,6 +32,8 @@ interface Props {
   onBekijken: (bestandPad: string) => void;
   onExporteren: () => void;
   onActie: (factuur: Factuur, actie: MogelijkeActie) => void;
+  /** Een mislukte koppeling (bijv. export) opnieuw proberen. */
+  onKoppelingOpnieuw: (taakId: string) => void;
   /** Id van de factuur waarvoor een statuswijziging loopt. */
   bezigId: string | null;
   laden: boolean;
@@ -43,6 +48,7 @@ export default function FacturenTabel({
   onBekijken,
   onExporteren,
   onActie,
+  onKoppelingOpnieuw,
   bezigId,
   laden,
   exporteren,
@@ -123,12 +129,36 @@ export default function FacturenTabel({
                 const bezig = bezigId === f.id;
                 return (
                   <tr key={f.id} className="border-b border-slate-50 align-top last:border-0 hover:bg-slate-50">
-                    <td className="px-4 py-2.5 text-slate-800">{f.leverancier ?? "—"}</td>
+                    <td className="px-4 py-2.5 text-slate-800">
+                      {f.leverancier ?? "—"}
+                      {f.herkomst === "mailbox" && (
+                        <span title="Binnengekomen via de mailbox" className="ml-1.5 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500">
+                          mail
+                        </span>
+                      )}
+                      {f.geexporteerd_op && (
+                        <span title="Geëxporteerd naar het boekhoudpakket" className="ml-1.5 rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-700">
+                          geboekt
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 py-2.5 text-slate-600">{f.factuurnummer ?? "—"}</td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-slate-600">{f.factuurdatum ?? "—"}</td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-slate-800">
                       {f.totaal_incl !== null && f.valuta && f.valuta !== "EUR" ? `${f.valuta} ` : ""}
                       {formatBedrag(f.totaal_incl)}
+                      {f.totaal_incl !== null && f.valuta && f.valuta !== "EUR" && (
+                        <span
+                          className="block text-xs text-slate-400"
+                          title={
+                            f.euro.koers !== null
+                              ? `Koers ${f.euro.koers.toLocaleString("nl-NL")} per euro, ${f.euro.koers_datum} (${f.euro.bron === "ecb" ? "ECB" : "mock"})`
+                              : "De wisselkoers wordt opgehaald"
+                          }
+                        >
+                          {f.euro.bedrag !== null ? `≈ € ${formatBedrag(f.euro.bedrag)}` : "koers volgt"}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-2.5">
                       {ongeldig ? (
@@ -144,6 +174,7 @@ export default function FacturenTabel({
                     </td>
                     <td className="px-4 py-2.5">
                       <SignaalBadges signalen={f.signalen} />
+                      <KoppelingBadges statussen={f.koppelingen} onOpnieuw={onKoppelingOpnieuw} />
                     </td>
                     <td className="px-4 py-2.5">
                       <span
@@ -196,7 +227,7 @@ export default function FacturenTabel({
                           onClick={() => onBewerken(f.id)}
                           className="rounded p-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-900"
                         >
-                          {f.status === "betaald" ? "Bekijken" : "Bewerken"}
+                          {vergrendeling(f) ? "Bekijken" : "Bewerken"}
                         </button>
                         {magVerwijderen(f, context) && (
                           <button

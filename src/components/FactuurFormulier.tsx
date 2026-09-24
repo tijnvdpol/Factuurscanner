@@ -11,8 +11,8 @@ interface Props {
   statusInfo?: React.ReactNode;
   /** Melding boven de knoppen, bijv. dat opslaan de status terugzet naar gescand. */
   waarschuwing?: string | null;
-  /** Betaalde facturen: velden vergrendeld, geen opslaan. */
-  alleenLezen?: boolean;
+  /** Reden waarom de factuur niet meer te wijzigen is (betaald, geëxporteerd); dan alleen bekijken. */
+  vergrendeld?: string | null;
   onOpslaan: () => void;
   onAnnuleren: () => void;
   bestandsnaam?: string;
@@ -47,7 +47,7 @@ export default function FactuurFormulier({
   status,
   statusInfo,
   waarschuwing,
-  alleenLezen = false,
+  vergrendeld = null,
   onOpslaan,
   onAnnuleren,
   bestandsnaam,
@@ -58,6 +58,7 @@ export default function FactuurFormulier({
   children,
   historie,
 }: Props) {
+  const alleenLezen = !!vergrendeld;
   const [tab, setTab] = useState<"gegevens" | "historie">("gegevens");
   const zet = <K extends keyof FactuurData>(veld: K, waarde: FactuurData[K]) =>
     onChange({ ...factuur, [veld]: waarde });
@@ -136,7 +137,7 @@ export default function FactuurFormulier({
       <>
       {alleenLezen && (
         <p className="mb-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-          Deze factuur is betaald en kan niet meer worden gewijzigd.
+          {vergrendeld}
         </p>
       )}
 

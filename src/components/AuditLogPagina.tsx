@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   ACTIE_LABELS,
+  BRON_LABELS,
   TABEL_LABELS,
   auditCsv,
   datumTijd,
@@ -65,7 +66,8 @@ export default function AuditLogPagina({ organisatieId, gebruikers, weergave }: 
         <div>
           <h2 className="text-sm font-semibold text-slate-800">Audit log</h2>
           <p className="text-xs text-slate-400">
-            Alle wijzigingen aan facturen, btw-regels, leveranciers, signalen en leden. De log kan door niemand worden
+            Alle wijzigingen aan facturen, btw-regels, leveranciers, signalen, leden en koppelingen, plus de acties van
+            koppelingen (import, verrijking, export, betaling, notificatie). De log kan door niemand worden
             aangepast of verwijderd.
           </p>
         </div>
@@ -150,6 +152,9 @@ export default function AuditLogPagina({ organisatieId, gebruikers, weergave }: 
                   <td className="whitespace-nowrap px-5 py-2.5 text-xs text-slate-500">{datumTijd(r.created_at)}</td>
                   <td className="px-5 py-2.5 text-xs text-slate-700">
                     {r.user_id ? (weergave.naamVan(r.user_id) ?? "onbekende gebruiker") : "systeem"}
+                    {r.bron !== "app" && r.bron !== "systeem" && (
+                      <span className="block text-slate-400">via {BRON_LABELS[r.bron] ?? r.bron}</span>
+                    )}
                   </td>
                   <td className="px-5 py-2.5">
                     <p className="text-slate-800">{omschrijving(r, weergave)}</p>

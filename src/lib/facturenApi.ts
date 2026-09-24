@@ -11,6 +11,7 @@ import {
 } from "../types";
 import { supabase } from "./supabase";
 import { verwijderBestand } from "./opslag";
+import type { KoppelingTaakStatus } from "./koppelingen";
 
 export class DbError extends Error {
   code: string | undefined;
@@ -24,7 +25,7 @@ export class DbError extends Error {
 const SELECT = `
   id, leverancier_naam, factuurnummer, factuurdatum, vervaldatum, valuta, bedrag_excl, totaal_incl,
   status, bestand_pad, bestandsnaam, ai_model, created_at, iban, btw_nummer, kvk_nummer,
-  grootboekrekening_id, codering_bron, codering_zekerheid,
+  grootboekrekening_id, codering_bron, codering_zekerheid, bedrag_eur, koers, koers_datum, koers_bron, bron, geexporteerd_op,
   user_id, gecontroleerd_door, gecontroleerd_op, goedgekeurd_door, goedgekeurd_op, betaald_op, afkeur_reden,
   leverancier:leveranciers!facturen_leverancier_fk ( iban ),
   btw_regels!btw_regels_factuur_id_fkey ( volgorde, tarief, grondslag, btw_bedrag ),
@@ -53,6 +54,12 @@ interface FactuurRij {
   grootboekrekening_id: string | null;
   codering_bron: CoderingBron | null;
   codering_zekerheid: number | string | null;
+  bedrag_eur: number | string | null;
+  koers: number | string | null;
+  koers_datum: string | null;
+  koers_bron: "ecb" | "mock" | null;
+  bron: "upload" | "mailbox";
+  geexporteerd_op: string | null;
   user_id: string | null;
   gecontroleerd_door: string | null;
   gecontroleerd_op: string | null;
@@ -111,6 +118,15 @@ function naarFactuur(rij: FactuurRij): Factuur {
       betaald_op: rij.betaald_op,
       afkeur_reden: rij.afkeur_reden,
     },
+    euro: {
+      bedrag: getal(rij.bedrag_eur),
+      koers: getal(rij.koers),
+      koers_datum: rij.koers_datum,
+      bron: rij.koers_bron,
+    },
+    herkomst: rij.bron ?? "upload",
+    geexporteerd_op: rij.geexporteerd_op ?? null,
+    koppelingen: [],
   };
 }
 
@@ -163,13 +179,24 @@ export function vertaalFout(error: PostgrestError, data?: FactuurData): DbError 
 }
 
 export async function haalFacturenOp(organisatieId: string): Promise<Factuur[]> {
-  const { data, error } = await supabase
-    .from("facturen")
-    .select(SELECT)
-    .eq("organisatie_id", organisatieId)
-    .order("created_at");
-  if (error) throw vertaalFout(error);
-  return (data as unknown as FactuurRij[]).map(naarFactuur);
+  const [facturen, koppelingen] = await Promise.all([
+    supabase.from("facturen").select(SELECT).eq("organisatie_id", organisatieId).order("created_at"),
+    supabase
+      .from("factuur_koppelingstatus")
+      .select("factuur_id, soort, taak_id, status, pogingen, max_pogingen, volgende_poging_op, laatste_fout, bijgewerkt_op")
+      .eq("organisatie_id", organisatieId),
+  ]);
+  if (facturen.error) throw vertaalFout(facturen.error);
+  // De status van koppelingen is extra informatie: lukt het ophalen niet, dan tonen we de facturen zonder.
+  if (koppelingen.error) console.warn("Status van koppelingen laden mislukt:", koppelingen.error.message);
+  const perFactuur = new Map<string, KoppelingTaakStatus[]>();
+  for (const s of (koppelingen.data ?? []) as KoppelingTaakStatus[]) {
+    perFactuur.set(s.factuur_id, [...(perFactuur.get(s.factuur_id) ?? []), s]);
+  }
+  return (facturen.data as unknown as FactuurRij[]).map((rij) => ({
+    ...naarFactuur(rij),
+    koppelingen: perFactuur.get(rij.id) ?? [],
+  }));
 }
 
 interface OpslaanInvoer {
