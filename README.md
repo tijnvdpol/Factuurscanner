@@ -2,7 +2,8 @@
 
 Scan facturen (PDF/foto), laat Google Gemini de velden herkennen, controleer ze en exporteer naar CSV.
 Met signalen (duplicaten, afwijkend IBAN e.d.), een coderingsvoorstel (grootboekrekening), organisaties
-met rollen, een goedkeuringsworkflow met functiescheiding en een audit trail.
+met rollen, een goedkeuringsworkflow met functiescheiding, een audit trail en koppelingen (zie
+[Koppelingen](#koppelingen)).
 
 - **Frontend:** React + TypeScript + Tailwind (Vite), gehost op Vercel
 - **Backend:** Supabase: Postgres met Row Level Security, Auth (e-mail + wachtwoord), Storage (bucket `facturen`) en Edge Function `scan-factuur`
@@ -19,10 +20,13 @@ met rollen, een goedkeuringsworkflow met functiescheiding en een audit trail.
 | `supabase/migrations/` | SQL-migraties (tabellen, RLS, RPC `sla_factuur_op`, Storage-bucket en -policies) |
 | `supabase/functions/scan-factuur/` | Edge Function (Deno) die Gemini aanroept, met automatische fallback naar een ander model |
 | `supabase/functions/_shared/gemini.ts` | Prompt, responsschema en normalisatie |
-| `supabase/handtests/` | Testscripts voor de SQL Editor (`fase1_rls.sql`, `fase2_3_workflow.sql`) |
+| `supabase/functions/verwerk-taken/` | Worker voor de takenwachtrij van de koppelingen (aangeroepen door pg_cron) |
+| `supabase/functions/koppeling-actie/` | Acties op koppelingen vanuit de app (overzicht, wachtrij testen, …) |
+| `supabase/functions/_shared/koppelingen/` | Gedeelde, testbare logica van de koppelingen (modus, taken, adapters) |
+| `supabase/handtests/` | Testscripts voor de SQL Editor (`fase1_rls.sql`, `fase2_3_workflow.sql`, `fase4_1_koppelingen.sql`) |
 | `supabase/tests/` | Geautomatiseerde databasetests (Vitest + PGlite, geen Docker nodig) |
 | `src/lib/veldvalidatie.ts`, `signalen.ts`, `workflow.ts`, `codering.ts`, `audit.ts` | Pure functies (validatie, signaalregels, statusregels, coderingsvoorstel, leesbare audit log) |
-| `docs/beslissingen.md` | Ontwerpbeslissingen van stap 2 en 3 |
+| `docs/beslissingen.md` | Ontwerpbeslissingen (stap 2 en 3, koppelingen) |
 
 ## Lokaal ontwikkelen
 
@@ -38,7 +42,7 @@ npm.cmd run dev          # http://localhost:5173
 npm.cmd test              # unit-tests + databasetests (alle migraties op een lokale Postgres in WebAssembly)
 npm.cmd run typecheck
 npm.cmd run lint
-npm.cmd run check:functions   # typecheck van de Edge Function (Deno via npx)
+npm.cmd run check:functions   # typecheck van de Edge Functions (Deno via npx)
 ```
 
 ## Rollen
@@ -89,6 +93,62 @@ Goedkeuren kan niet voor een factuur die je zelf hebt ingevoerd of gecontroleerd
 
    Deploy daarna opnieuw, want Vite leest deze waarden in tijdens de build.
 
+## Koppelingen
+
+Elke koppeling werkt in **mock** (realistische testdata, geen externe accounts nodig) of **live**. Standaard staat
+alles op mock. De modus stel je in op twee manieren:
+
+- **Pagina Koppelingen** (beheerder): per koppeling mock of live.
+- **Supabase secret** `KOPPELING_<NAAM>_MODUS` = `live` of `mock` (bijv. `KOPPELING_VIES_MODUS=live`). Dit gaat altijd voor
+  en is dan in de app niet te wijzigen ("vastgezet door server"). Handig om bijvoorbeeld een testomgeving op mock vast te zetten.
+
+Secrets staan alleen in de **Supabase secrets** (Edge Functions → Secrets), nooit in `.env` of Vercel met `VITE_`. De
+pagina Koppelingen laat zien welke secrets voor live nog ontbreken (alleen de namen).
+
+| Koppeling | `<NAAM>` | Nodig voor live | Status |
+|---|---|---|---|
+| Basis (wachtrij, retries) | – | `WORKER_GEHEIM` + 2 Vault-secrets (zie hieronder) | fase 4.1 ✅ |
+| Verrijken: VIES | `VIES` | niets (gratis EU-API) | fase 4.2 |
+| Verrijken: ECB-wisselkoersen | `ECB` | niets (gratis API) | fase 4.2 |
+| Verrijken: KvK | `KVK` | `KVK_API_KEY` | fase 4.2 |
+| Mailbox-import | `MAILBOX` | Mailgun-account (gratis plan) + `MAILGUN_SIGNING_KEY` | fase 4.3 |
+| E-mailnotificaties | `EMAIL` | Resend-account + `RESEND_API_KEY`, `MAIL_AFZENDER`, `APP_URL` | fase 4.4 |
+| Boekhoudpakket | `BOEKHOUDING` | Moneybird + `MONEYBIRD_TOKEN`, `MONEYBIRD_ADMINISTRATIE_ID` | fase 4.5 |
+| Betaalopdrachten | `BETALING` | niets (live = SEPA-bestand downloaden) | fase 4.6 |
+| Power BI | – | Power BI Desktop + een rapportagerol | fase 4.7 |
+
+Mislukt een koppeling, dan probeert de wachtrij het automatisch opnieuw (na 1 min, 5 min, 30 min, 2 uur en 12 uur). In
+de factuurlijst verschijnt dan een badge, bijv. "VIES: nieuwe poging om 14:05" of "Export mislukt" (klik om het meteen
+opnieuw te proberen). Elke actie van een koppeling staat in de audit log, met de bron (bijv. "via VIES") en de gebruiker,
+of "systeem".
+
+### Basis: wachtrij en worker (fase 4.1)
+
+Eenmalig, in deze volgorde:
+
+1. **Migratie** `20260924100000_koppelingen_basis.sql` uitvoeren (`npx.cmd supabase db push`, of plakken in de SQL Editor).
+   Die zet ook de extensies `pg_cron` en `pg_net` aan en plant de cronjob `factuurscanner-verwerk-taken` (elke minuut).
+2. **Geheim maken** voor de worker (PowerShell):
+   ```powershell
+   $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); -join ($b | ForEach-Object { $_.ToString("x2") })
+   ```
+3. **Supabase secret** (Edge Functions → Secrets): `WORKER_GEHEIM` = het geheim uit stap 2.
+4. **Vault** (SQL Editor, één keer; vervang de twee waarden). De cronjob leest hier de URL en het geheim:
+   ```sql
+   select vault.create_secret('https://<project-ref>.supabase.co', 'factuurscanner_project_url');
+   select vault.create_secret('<het geheim uit stap 2>', 'factuurscanner_worker_geheim');
+   ```
+5. **Edge Functions deployen** (commando's één voor één):
+   ```powershell
+   npx.cmd supabase functions deploy verwerk-taken --use-api --project-ref <project-ref>
+   npx.cmd supabase functions deploy koppeling-actie --use-api --project-ref <project-ref>
+   ```
+6. **Controleren:**
+   - Draai `supabase/handtests/fase4_1_koppelingen.sql` in de SQL Editor. Verwacht: `GESLAAGD: alle 10 tests ok`.
+   - In de app (als controller of beheerder): **Koppelingen → Test de wachtrij**. Binnen een minuut staat de testtaak op
+     *Gelukt*. Blijft hij op *In wachtrij* staan, controleer dan stap 3 en 4 (zelfde geheim?) en of de cronjob bestaat:
+     `select * from cron.job;` en `select * from cron.job_run_details order by start_time desc limit 5;`.
+
 ## Beveiliging
 
 - Elke tabel heeft RLS op lidmaatschap van de organisatie (`is_lid`/`heeft_rol`). `btw_regels` wordt beveiligd via de bijbehorende factuur.
@@ -97,3 +157,6 @@ Goedkeuren kan niet voor een factuur die je zelf hebt ingevoerd of gecontroleerd
 - Storage-bestanden staan onder `{organisatie_id}/{factuur_id}/…` (oude bestanden onder `{user_id}/…` blijven leesbaar voor de organisatie).
 - De Edge Function haalt bestanden op met de JWT van de gebruiker, dus ook daar gelden de Storage-policies.
 - Zet nooit secrets met het prefix `VITE_` in `.env`, want die komen in de browser-bundle terecht.
+- Koppelingen: Edge Functions met de service-rolsleutel wijzigen facturen alleen via databasefuncties die dezelfde controles
+  doen als de app. De service role kan de status niet rechtstreeks wijzigen (trigger). De worker is alleen aan te roepen met
+  `WORKER_GEHEIM`; de takenwachtrij is voor gebruikers alleen-lezen.

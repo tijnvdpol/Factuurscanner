@@ -12,6 +12,7 @@ import {
   type WorkflowContext,
 } from "../lib/workflow";
 import SignaalBadges from "./SignaalBadges";
+import KoppelingBadges from "./KoppelingBadges";
 
 const STATUS_KLASSEN: Record<FactuurStatus, string> = {
   gescand: "bg-slate-100 text-slate-600",
@@ -29,6 +30,8 @@ interface Props {
   onBekijken: (bestandPad: string) => void;
   onExporteren: () => void;
   onActie: (factuur: Factuur, actie: MogelijkeActie) => void;
+  /** Een mislukte koppeling (bijv. export) opnieuw proberen. */
+  onKoppelingOpnieuw: (taakId: string) => void;
   /** Id van de factuur waarvoor een statuswijziging loopt. */
   bezigId: string | null;
   laden: boolean;
@@ -43,6 +46,7 @@ export default function FacturenTabel({
   onBekijken,
   onExporteren,
   onActie,
+  onKoppelingOpnieuw,
   bezigId,
   laden,
   exporteren,
@@ -144,6 +148,7 @@ export default function FacturenTabel({
                     </td>
                     <td className="px-4 py-2.5">
                       <SignaalBadges signalen={f.signalen} />
+                      <KoppelingBadges statussen={f.koppelingen} onOpnieuw={onKoppelingOpnieuw} />
                     </td>
                     <td className="px-4 py-2.5">
                       <span

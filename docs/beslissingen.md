@@ -1,4 +1,4 @@
-# Beslissingen stap 2 en 3
+# Beslissingen
 
 Per keuze: **wat** er gekozen is, **waarom**, en welk **alternatief** is afgewogen.
 
@@ -239,3 +239,79 @@ Per keuze: **wat** er gekozen is, **waarom**, en welk **alternatief** is afgewog
 
 ### B50. Handtest voor productie
 - `supabase/handtests/fase2_3_workflow.sql` (15 tests: signalen, RLS tussen organisaties, functiescheiding, limiet, kritiek signaal, terugval, audit log onveranderlijk) draait ook automatisch op PGlite.
+
+## Fase 4.1: basis voor de koppelingen
+
+Afspraken met de opdrachtgever vóór de bouw: Mailgun (gratis plan: 1 inbound route) voor inkomende mail; voorlopig één
+organisatie met één set sleutels in de Supabase secrets; goedkeuringslimiet in euro bij vreemde valuta; facturen in een
+betaalbatch of na export inhoudelijk vergrendeld; de knop goedgekeurd → betaald blijft voor handmatige betalingen.
+
+### B51. Service role telt niet meer als "bevoegd"
+- **Wat:** `bewaak_factuur` en `bewaak_btw_regel` behandelen `service_role` nu als gewone gebruiker: status en
+  workflowkolommen zijn niet rechtstreeks te wijzigen. Alleen security-definerfuncties (eigenaar `postgres`) en de SQL Editor mogen dat.
+- **Waarom:** de koppelingen draaien in Edge Functions met de service-rolsleutel. Zonder deze wijziging kan een fout in zo'n
+  functie (of een gelekte sleutel) `wijzig_status` en dus functiescheiding, limiet en blokkades omzeilen.
+- **Alternatief:** alleen afspreken dat functies geen directe updates doen. Dat is niet afdwingbaar.
+
+### B52. `wijzig_status` als wrapper om `intern.wijzig_status_als(gebruiker, …)`
+- **Wat:** de controles staan in één functie die de gebruiker als parameter krijgt. `public.wijzig_status` geeft
+  `auth.uid()` en bron `app` mee; goedkeuren via een mail-link (fase 4.4) straks de gebruiker uit het token en bron `email`.
+- **Waarom:** één plek voor de regels; de mailroute kan niet "net iets anders" controleren. De bestaande tests bewaken dat
+  het gedrag gelijk is gebleven.
+- **Detail:** lidmaatschap wordt nu opgezocht voor de opgegeven gebruiker (i.p.v. `is_lid()`, dat `auth.uid()` gebruikt). De
+  melding voor een buitenstaander blijft "Factuur niet gevonden.".
+
+### B53. Audit log: kolom `bron` en gebeurtenissen
+- **Wat:**
+  - `bron`: app, systeem, mailbox, vies, ecb, kvk, boekhouding, betaling of email. Bestaande regels krijgen `app`.
+  - Gebruiker en bron komen uit transactie-instellingen (`factuurscanner.audit_user`/`audit_bron`, via
+    `intern.zet_audit_context`), met `auth.uid()` als terugval. Geen gebruiker en geen bron = `systeem`.
+  - Nieuwe acties `import`, `verrijking`, `export`, `betaling`, `notificatie` voor gebeurtenissen zonder rijwijziging
+    (`intern.log_gebeurtenis`). Hoort een gebeurtenis bij een factuur, dan is de regel `tabel = 'facturen'` met het
+    factuur-id, zodat hij in de historie van de factuur staat.
+- **Waarom:** de opdracht vraagt per actie de bron en "gebruiker of systeem". Een kolom toevoegen is geen UPDATE; de
+  onveranderlijkheid (B45) blijft intact.
+- **Alternatief:** een aparte logtabel voor koppelingen. Dan is er geen volledige historie meer op één plek.
+
+### B54. Takenwachtrij in Postgres, worker als Edge Function, cron via pg_cron + pg_net
+- **Wat:** `koppeling_taken` met status wachtrij → bezig → gelukt/opgegeven. `claim_taken` gebruikt `for update skip
+  locked` (meerdere workers tegelijk is veilig). Retries na 1 min, 5 min, 30 min, 2 uur, 12 uur; standaard maximaal 6
+  pogingen. Een taak die > 10 minuten "bezig" blijft (crash, time-out), komt terug in de wachtrij.
+- **Idempotent:** `sleutel` is uniek zolang een taak actief is (partiële unieke index). Dezelfde VIES-controle twee keer
+  aanvragen levert één taak op.
+- **Definitief vs. tijdelijk:** een handler gooit `DefinitieveFout` als een nieuwe poging niets oplost (bijv. ontbrekende
+  mapping); dan wordt de taak direct opgegeven.
+- **Audit:** alleen het eindresultaat (gelukt/opgegeven) en "handmatig opnieuw geprobeerd" komen in de audit log, niet
+  elke tussenpoging. De tussenpogingen staan in de taak zelf (pogingen, laatste fout).
+- **Waarom:** geen extra dienst nodig (alles zit al in Supabase); de status per factuur is een simpele view; retries overleven
+  een herstart.
+- **Alternatief:** retries binnen één functieaanroep. Die gaan verloren bij een time-out, en er is dan geen zichtbare status.
+
+### B55. De worker claimt alleen soorten waarvoor hij een verwerking heeft
+- **Wat:** `verwerk-taken` geeft de lijst met eigen handlers mee aan `claim_taken`.
+- **Waarom:** staat de migratie van een fase er al maar de nieuwe functie nog niet, dan blijven die taken gewoon wachten
+  in plaats van als "onbekend" te worden opgegeven.
+
+### B56. Cron roept de worker aan met een gedeeld geheim uit Vault
+- **Wat:** de cronjob (elke minuut) en `plan_taak` (direct na aanmaken) doen een `net.http_post` naar `verwerk-taken` met
+  header `x-worker-geheim`. De URL en het geheim staan in Supabase Vault; de functie vergelijkt met het secret
+  `WORKER_GEHEIM` (in constante tijd). `verify_jwt` staat uit voor deze functie.
+- **Waarom:** de service-rolsleutel hoeft zo niet in de database of in cron te staan. Zonder Vault-secrets doet de job niets
+  (geen foutmeldingen elke minuut). In PGlite (tests) ontbreken pg_cron/pg_net/Vault; daar is `start_worker` een no-op.
+
+### B57. Modus: env gaat voor de instelling
+- **Wat:** `KOPPELING_<NAAM>_MODUS` (Supabase secret) wint en maakt de instelling alleen-lezen ("vastgezet door server");
+  anders geldt `koppeling_instellingen`; anders mock. De regels staan in `_shared/koppelingen/modus.ts`, dat zowel de Edge
+  Functions als de frontend gebruiken.
+- **Waarom:** de opdracht vraagt "via env óf instellingenpagina". Env als harde override maakt het mogelijk een testomgeving
+  gegarandeerd op mock te houden.
+- **Secrets:** de functie `koppeling-actie` meldt alleen welke secrets ontbreken, nooit waarden. `config` in de tabel is
+  alleen voor niet-geheime instellingen.
+
+### B58. Badges alleen bij problemen
+- **Wat:** de factuurlijst toont een badge bij een mislukte poging ("VIES: nieuwe poging om 14:05") of een opgegeven taak
+  ("Export mislukt", klik = opnieuw proberen). Gelukte, wachtende of lopende taken geven geen badge.
+- **Waarom:** anders staat bij elke factuur een rij badges. Het volledige overzicht staat op de pagina Koppelingen en in de
+  historie van de factuur.
+- **Opnieuw proberen:** elk lid mag dat; de taak zelf controleert opnieuw of de actie is toegestaan.
+

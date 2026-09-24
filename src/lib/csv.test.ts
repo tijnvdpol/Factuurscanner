@@ -10,6 +10,7 @@ function factuur(extra: Partial<Factuur>): Factuur {
     factuurnummer: "H-1",
     leverancier_iban: null,
     signalen: [],
+    koppelingen: [],
     codering: GEEN_CODERING,
     bestandsnaam: null,
     bestand_pad: null,

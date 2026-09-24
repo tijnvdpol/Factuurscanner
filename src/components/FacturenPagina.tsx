@@ -22,6 +22,7 @@ import {
   verwijderFactuur,
   wijzigStatus,
 } from "../lib/facturenApi";
+import { probeerTaakOpnieuw } from "../lib/koppelingenApi";
 import {
   FUNCTIESCHEIDING_MELDING,
   valtTerugNaGewijzigd,
@@ -59,6 +60,7 @@ function laadLokaleFacturen(): Factuur[] {
       bestand_pad: f.bestand_pad ?? null,
       leverancier_iban: null,
       signalen: [],
+      koppelingen: [],
       codering: GEEN_CODERING,
       workflow: LEGE_WORKFLOW,
       status: "gescand",
@@ -210,6 +212,18 @@ export default function FacturenPagina({ sessie, lidmaatschap, rekeningen, gebru
       setFoutmelding(foutTekst(err, "De status kon niet worden gewijzigd."));
     } finally {
       setBezigId(null);
+    }
+  };
+
+  const probeerKoppelingOpnieuw = async (taakId: string) => {
+    setFoutmelding(null);
+    setMelding(null);
+    try {
+      await probeerTaakOpnieuw(taakId);
+      setMelding("De koppeling wordt opnieuw geprobeerd.");
+      await vernieuw();
+    } catch (err) {
+      setFoutmelding(foutTekst(err, "Opnieuw proberen is mislukt."));
     }
   };
 
@@ -510,6 +524,7 @@ export default function FacturenPagina({ sessie, lidmaatschap, rekeningen, gebru
         facturen={facturen}
         context={context}
         onActie={voerActieUit}
+        onKoppelingOpnieuw={probeerKoppelingOpnieuw}
         bezigId={bezigId}
         laden={laden}
         exporteren={exporteren}

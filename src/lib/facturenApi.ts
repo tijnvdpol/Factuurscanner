@@ -11,6 +11,7 @@ import {
 } from "../types";
 import { supabase } from "./supabase";
 import { verwijderBestand } from "./opslag";
+import type { KoppelingTaakStatus } from "./koppelingen";
 
 export class DbError extends Error {
   code: string | undefined;
@@ -111,6 +112,7 @@ function naarFactuur(rij: FactuurRij): Factuur {
       betaald_op: rij.betaald_op,
       afkeur_reden: rij.afkeur_reden,
     },
+    koppelingen: [],
   };
 }
 
@@ -163,13 +165,24 @@ export function vertaalFout(error: PostgrestError, data?: FactuurData): DbError 
 }
 
 export async function haalFacturenOp(organisatieId: string): Promise<Factuur[]> {
-  const { data, error } = await supabase
-    .from("facturen")
-    .select(SELECT)
-    .eq("organisatie_id", organisatieId)
-    .order("created_at");
-  if (error) throw vertaalFout(error);
-  return (data as unknown as FactuurRij[]).map(naarFactuur);
+  const [facturen, koppelingen] = await Promise.all([
+    supabase.from("facturen").select(SELECT).eq("organisatie_id", organisatieId).order("created_at"),
+    supabase
+      .from("factuur_koppelingstatus")
+      .select("factuur_id, soort, taak_id, status, pogingen, max_pogingen, volgende_poging_op, laatste_fout, bijgewerkt_op")
+      .eq("organisatie_id", organisatieId),
+  ]);
+  if (facturen.error) throw vertaalFout(facturen.error);
+  // De status van koppelingen is extra informatie: lukt het ophalen niet, dan tonen we de facturen zonder.
+  if (koppelingen.error) console.warn("Status van koppelingen laden mislukt:", koppelingen.error.message);
+  const perFactuur = new Map<string, KoppelingTaakStatus[]>();
+  for (const s of (koppelingen.data ?? []) as KoppelingTaakStatus[]) {
+    perFactuur.set(s.factuur_id, [...(perFactuur.get(s.factuur_id) ?? []), s]);
+  }
+  return (facturen.data as unknown as FactuurRij[]).map((rij) => ({
+    ...naarFactuur(rij),
+    koppelingen: perFactuur.get(rij.id) ?? [],
+  }));
 }
 
 interface OpslaanInvoer {

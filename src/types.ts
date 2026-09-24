@@ -1,3 +1,5 @@
+import type { KoppelingTaakStatus } from "./lib/koppelingen";
+
 export interface BtwRegel {
   tarief: number | null;
   grondslag: number | null;
@@ -85,6 +87,8 @@ export interface Factuur extends FactuurData {
   ai_model: string | null;
   aangemaaktOp: string;
   workflow: Workflow;
+  /** Laatste taak per koppeling (VIES, export, …); leeg als er niets loopt of de status niet geladen kon worden. */
+  koppelingen: KoppelingTaakStatus[];
 }
 
 /** Wie deed wat in de statusworkflow (user-id's en tijdstippen). */
