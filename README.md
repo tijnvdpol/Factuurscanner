@@ -70,6 +70,10 @@ Goedkeuren kan niet voor een factuur die je zelf hebt ingevoerd of gecontroleerd
    5. `supabase/migrations/20260923190000_organisaties.sql`
    6. `supabase/migrations/20260923200000_workflow.sql`
    7. `supabase/migrations/20260923210000_audit.sql`
+   8. Koppelingen (zie [Koppelingen](#koppelingen) voor wat elke stap nodig heeft):
+      `20260924100000_koppelingen_basis.sql`, `20260924110000_verrijking.sql`, `20260924120000_mailbox.sql`,
+      `20260924130000_notificaties.sql`, `20260924140000_boekhouding.sql`, `20260924150000_betalingen.sql`,
+      `20260924160000_reporting.sql`
 
    Of met de CLI: `npx.cmd supabase db push`.
 3. **Testen**: draai `supabase/handtests/fase1_rls.sql` en daarna `supabase/handtests/fase2_3_workflow.sql`, elk in een nieuwe query. De verwachte uitkomst is `GESLAAGD: alle 19 tests ok` en `GESLAAGD: alle 15 tests ok`.
