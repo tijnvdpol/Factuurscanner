@@ -5,6 +5,7 @@ import GrootboekBeheer from "./components/GrootboekBeheer";
 import LedenBeheer from "./components/LedenBeheer";
 import AuditLogPagina from "./components/AuditLogPagina";
 import KoppelingenPagina from "./components/KoppelingenPagina";
+import InboxPagina from "./components/InboxPagina";
 import type { WeergaveContext } from "./lib/audit";
 import { rekeningNaam } from "./lib/codering";
 import type { OrganisatieContext } from "./components/OrganisatiePoort";
@@ -13,10 +14,11 @@ import { haalOrgGebruikersOp } from "./lib/organisatieApi";
 import { supabase } from "./lib/supabase";
 import { ROL_LABELS, type Grootboekrekening, type OrgGebruiker, type Rol } from "./types";
 
-type Pagina = "facturen" | "grootboek" | "leden" | "koppelingen" | "audit";
+type Pagina = "facturen" | "inbox" | "grootboek" | "leden" | "koppelingen" | "audit";
 
 const PAGINAS: { sleutel: Pagina; label: string; rollen: Rol[] | null }[] = [
   { sleutel: "facturen", label: "Facturen", rollen: null },
+  { sleutel: "inbox", label: "Inbox", rollen: null },
   { sleutel: "grootboek", label: "Grootboekrekeningen", rollen: null },
   { sleutel: "leden", label: "Leden", rollen: ["beheerder"] },
   { sleutel: "koppelingen", label: "Koppelingen", rollen: ["controller", "beheerder"] },
@@ -131,6 +133,9 @@ export default function App({ sessie, lidmaatschap, lidmaatschappen, onWissel, o
             magBeheren={lidmaatschap.rol === "beheerder" || lidmaatschap.rol === "controller"}
             onGewijzigd={vernieuwRekeningen}
           />
+        )}
+        {actievePagina === "inbox" && (
+          <InboxPagina organisatieId={organisatieId} rol={lidmaatschap.rol} naamVan={weergave.naamVan} />
         )}
         {actievePagina === "koppelingen" && (
           <KoppelingenPagina organisatieId={organisatieId} magBeheren={lidmaatschap.rol === "beheerder"} />

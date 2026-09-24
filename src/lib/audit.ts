@@ -74,6 +74,9 @@ export const TABEL_LABELS: Record<string, string> = {
   koppeling_instellingen: "Koppeling",
   koppeling_taken: "Koppelingstaak",
   verificaties: "Verificatie",
+  inbox_adressen: "Ontvangstadres",
+  inbox_afzenders: "Vertrouwde afzender",
+  inbox_berichten: "Inbox",
 };
 
 export const VELD_LABELS: Record<string, string> = {
@@ -126,6 +129,10 @@ export const VELD_LABELS: Record<string, string> = {
   uitkomst: "Uitkomst",
   bron: "Bron",
   opgevraagd_op: "Opgevraagd op",
+  adres: "Adres",
+  patroon: "Afzender",
+  omschrijving: "Omschrijving",
+  toegevoegd_door: "Toegevoegd door",
 };
 
 const UITKOMST_LABELS: Record<string, string> = {
@@ -136,7 +143,7 @@ const UITKOMST_LABELS: Record<string, string> = {
   uitgeschreven: "uitgeschreven",
 };
 
-const GEBRUIKER_VELDEN = new Set(["gecontroleerd_door", "goedgekeurd_door", "opgelost_door", "user_id"]);
+const GEBRUIKER_VELDEN = new Set(["gecontroleerd_door", "goedgekeurd_door", "opgelost_door", "user_id", "toegevoegd_door"]);
 const BEDRAG_VELDEN = new Set(["bedrag_excl", "totaal_incl", "grondslag", "btw_bedrag", "goedkeuringslimiet", "bedrag_eur"]);
 const TIJD_VELDEN = new Set(["gecontroleerd_op", "goedgekeurd_op", "betaald_op", "opgelost_op", "created_at", "opgevraagd_op"]);
 // Technische velden die in de tijdlijn niets toevoegen
@@ -232,6 +239,9 @@ export function omschrijving(regel: AuditRegel, ctx: WeergaveContext): string {
     const wat = rij.soort === "vies" ? "VIES" : "KvK";
     const uitkomst = typeof regel.nieuw?.uitkomst === "string" ? `: ${formatWaarde("uitkomst", regel.nieuw.uitkomst, ctx)}` : "";
     return `Controle ${wat}${typeof rij.sleutel === "string" ? ` ${rij.sleutel}` : ""}${uitkomst}`;
+  }
+  if (regel.tabel === "inbox_afzenders" && typeof rij.patroon === "string") {
+    return `${tabel} ${rij.patroon} ${ACTIE_LABELS[regel.actie].toLowerCase()}`;
   }
   if (regel.tabel === "koppeling_instellingen" && typeof rij.koppeling === "string") {
     return `${tabel} ${formatWaarde("koppeling", rij.koppeling, ctx)} ${ACTIE_LABELS[regel.actie].toLowerCase()}`;

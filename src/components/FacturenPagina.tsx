@@ -63,6 +63,7 @@ function laadLokaleFacturen(): Factuur[] {
       signalen: [],
       koppelingen: [],
       euro: GEEN_OMREKENING,
+      herkomst: "upload",
       codering: GEEN_CODERING,
       workflow: LEGE_WORKFLOW,
       status: "gescand",

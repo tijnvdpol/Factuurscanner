@@ -21,7 +21,9 @@ met rollen, een goedkeuringsworkflow met functiescheiding, een audit trail en ko
 | `supabase/functions/scan-factuur/` | Edge Function (Deno) die Gemini aanroept, met automatische fallback naar een ander model |
 | `supabase/functions/_shared/gemini.ts` | Prompt, responsschema en normalisatie |
 | `supabase/functions/verwerk-taken/` | Worker voor de takenwachtrij van de koppelingen (aangeroepen door pg_cron) |
-| `supabase/functions/koppeling-actie/` | Acties op koppelingen vanuit de app (overzicht, wachtrij testen, …) |
+| `supabase/functions/koppeling-actie/` | Acties op koppelingen vanuit de app (overzicht, wachtrij testen, testmail, …) |
+| `supabase/functions/inbound-mail/` | Webhook voor inkomende mail (Mailgun) |
+| `supabase/functions/_shared/geminiScan.ts` | Gemini-scan met modelkeuze en fallback (gedeeld door scan-factuur en de mailbox) |
 | `supabase/functions/_shared/koppelingen/` | Gedeelde, testbare logica van de koppelingen (modus, taken, adapters) |
 | `supabase/handtests/` | Testscripts voor de SQL Editor (`fase1_rls.sql`, `fase2_3_workflow.sql`, `fase4_1_koppelingen.sql`) |
 | `supabase/tests/` | Geautomatiseerde databasetests (Vitest + PGlite, geen Docker nodig) |
@@ -111,7 +113,7 @@ pagina Koppelingen laat zien welke secrets voor live nog ontbreken (alleen de na
 | Verrijken: VIES | `VIES` | niets (gratis EU-API) | fase 4.2 ✅ |
 | Verrijken: ECB-wisselkoersen | `ECB` | niets (gratis API) | fase 4.2 ✅ |
 | Verrijken: KvK | `KVK` | `KVK_API_KEY` (productie), of `KVK_OMGEVING=test` zonder sleutel | fase 4.2 ✅ |
-| Mailbox-import | `MAILBOX` | Mailgun-account (gratis plan) + `MAILGUN_SIGNING_KEY` | fase 4.3 |
+| Mailbox-import | `MAILBOX` | Mailgun-account (gratis plan) + eigen (sub)domein + `MAILGUN_SIGNING_KEY` | fase 4.3 ✅ |
 | E-mailnotificaties | `EMAIL` | Resend-account + `RESEND_API_KEY`, `MAIL_AFZENDER`, `APP_URL` | fase 4.4 |
 | Boekhoudpakket | `BOEKHOUDING` | Moneybird + `MONEYBIRD_TOKEN`, `MONEYBIRD_ADMINISTRATIE_ID` | fase 4.5 |
 | Betaalopdrachten | `BETALING` | niets (live = SEPA-bestand downloaden) | fase 4.6 |
@@ -184,6 +186,55 @@ Bij elke opgeslagen factuur plant de database de controles in; de worker voert z
 | VIES | nummer eindigt op `99` → ongeldig; op `98` → VIES tijdelijk niet bereikbaar (test de retries); anders geldig |
 | ECB | vaste koersen (USD 1,1622, GBP 0,8641, CHF 0,9362, JPY 178,86, …); weekend → koers van vrijdag; onbekende valuta → mislukt |
 | KvK | 68750110, 12345678 en 87654321 (uitgeschreven) zijn vaste testbedrijven; eindigt op `00` → niet gevonden, op `99` → uitgeschreven, op `98` → andere naam; anders dezelfde naam als op de factuur |
+
+### Mailbox-import (fase 4.3)
+
+Facturen die naar het ontvangstadres worden gemaild, komen automatisch binnen (pagina **Inbox**):
+
+- **Bekende afzender** (staat bij *Vertrouwde afzenders* én SPF of DKIM geslaagd volgens Mailgun): elke pdf of foto wordt
+  gescand (Gemini, dezelfde scan als bij uploaden) en wordt een factuur met status *Gescand*, gemarkeerd met "mail".
+  "Ingevoerd door" blijft leeg; een mens controleert, een ander keurt goed (functiescheiding en limiet gelden gewoon).
+- **Onbekende afzender** (of SPF/DKIM mislukt, of spam): de mail wacht in de inbox op een controller of beheerder:
+  *Verwerken* (eventueel het adres vertrouwen) of *Weigeren* (met reden).
+- Andere bijlagen (Word, kleine logo's, afbeeldingen in de mailtekst, > 15 MB) worden genegeerd. Een factuur die al bestaat
+  (zelfde leverancier en nummer) wordt niet dubbel aangemaakt. Mislukt het scannen, dan volgen automatisch nieuwe pogingen;
+  daarna staat de bijlage op *Mislukt* met een knop *Opnieuw proberen*.
+- Alles staat in de audit log: ontvangst (bron mailbox), beoordeling (gebruiker), aangemaakte factuur (bron mailbox).
+
+**Mock-modus** (standaard): echte mail wordt geweigerd; op de pagina Inbox staan knoppen *Testmail van bekende afzender*
+en *Testmail van onbekende afzender*. Die maken een mail met een echte PDF-factuur (elke keer een ander nummer) en sturen
+die door dezelfde verwerking. Zonder `GEMINI_API_KEY` (of met `SCAN_MODUS=mock`) gebruikt de scan de gegevens uit het PDF.
+Stel eerst een ontvangstadres in (in mock-modus mag dat elk adres zijn).
+
+**Live instellen (Mailgun, gratis plan: 1 domein, 1 inbound route, 100 mails/dag):**
+
+1. Account maken op mailgun.com, regio **EU**.
+2. **Domein toevoegen** voor ontvangst, bij voorkeur een subdomein, bijv. `inbox.jouwbedrijf.nl`. Zet bij je DNS-provider
+   de **MX-records** die Mailgun toont (`mxa.eu.mailgun.org` en `mxb.eu.mailgun.org`, prioriteit 10) en wacht tot Mailgun
+   het domein als geverifieerd toont. Een subdomein laat je gewone mail ongemoeid.
+3. **Route maken** (Send → Receiving → Create route):
+   - Expression type *Match recipient*: `facturen@inbox.jouwbedrijf.nl`
+   - Actie *Forward*: `https://<project-ref>.supabase.co/functions/v1/inbound-mail`
+   - *Stop* aanvinken.
+4. **Signing key** kopiëren (Mailgun → Sending → Webhooks → *HTTP webhook signing key*) en als Supabase secret zetten:
+   `MAILGUN_SIGNING_KEY`.
+5. **Deployen:**
+   ```powershell
+   npx.cmd supabase functions deploy inbound-mail --use-api --project-ref <project-ref>
+   npx.cmd supabase functions deploy verwerk-taken --use-api --project-ref <project-ref>
+   npx.cmd supabase functions deploy koppeling-actie --use-api --project-ref <project-ref>
+   npx.cmd supabase functions deploy scan-factuur --use-api --project-ref <project-ref>
+   ```
+   (`scan-factuur` is intern omgebouwd naar de gedeelde scanmodule; het gedrag is gelijk.)
+6. In de app (beheerder): **Inbox → Ontvangstadres** = `facturen@inbox.jouwbedrijf.nl`; voeg de adressen of domeinen van je
+   leveranciers toe bij *Vertrouwde afzenders*; zet **Koppelingen → Mailbox-import** op *Live* (of secret
+   `KOPPELING_MAILBOX_MODUS=live`).
+7. **Controleren:** draai `supabase/handtests/fase4_3_mailbox.sql` (verwacht: `GESLAAGD: alle 9 tests ok`) en mail een
+   pdf-factuur naar het adres. Binnen een minuut staat de mail in de inbox (Supabase → Edge Functions → inbound-mail → Logs
+   bij problemen; Mailgun → Logs toont of de route is aangeroepen).
+
+Webhook-beveiliging: elke aanroep moet een geldige Mailgun-handtekening hebben (HMAC-SHA256 met de signing key, maximaal
+12 uur oud: Mailgun probeert tot 8 uur opnieuw). Dezelfde mail (Message-Id) wordt nooit twee keer verwerkt.
 
 ## Beveiliging
 

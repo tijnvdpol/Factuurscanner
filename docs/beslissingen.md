@@ -377,3 +377,69 @@ betaalbatch of na export inhoudelijk vergrendeld; de knop goedgekeurd → betaal
 - Rooktest tegen de echte diensten (24-09-2026): VIES (geldig en ongeldig NL-nummer), ECB (USD op een zaterdag → koers van
   vrijdag; onbekende valuta → definitief) en de KvK-testomgeving (68750110 gevonden, onbekend nummer → niet gevonden).
 
+## Fase 4.3: mailbox-import
+
+### B66. Mailgun, met één route voor één organisatie
+- **Wat:** inkomende mail via een Mailgun inbound route (`forward()` naar de Edge Function `inbound-mail`). Het ontvangstadres
+  staat in `inbox_adressen` en bepaalt de organisatie.
+- **Waarom:** Mailgun ondertekent webhooks (HMAC-SHA256); Postmark Inbound doet dat niet (alleen Basic Auth). Het gratis plan
+  (1 inbound route, 100 mails/dag) is genoeg voor één organisatie (afspraak). Meer organisaties = meer adressen in dezelfde
+  route (bijv. `match_recipient(".*@inbox.domein.nl")`); de tabel is daar al op ingericht.
+
+### B67. De webhook slaat alleen op; scannen gebeurt in de worker
+- **Wat:** `inbound-mail` controleert de handtekening, registreert de mail, zet bruikbare bijlagen in Storage
+  (`{organisatie_id}/inbox/{bericht_id}/…`) en antwoordt meteen. Per bijlage volgt een `mailbox`-taak die scant en de
+  factuur maakt.
+- **Waarom:** scannen met Gemini duurt tot een minuut per bijlage; een webhook die lang duurt, laat Mailgun opnieuw
+  proberen. Via de wachtrij krijgt het scannen ook retries en een zichtbare status.
+- **Antwoordcodes:** 200 (verwerkt of al ontvangen), 406 (onbekend adres, mock-modus, onleesbaar: niet opnieuw proberen),
+  401 (handtekening), 500 (tijdelijk: Mailgun probeert het tot 8 uur opnieuw).
+
+### B68. Idempotent: Message-Id en "afgerond"
+- **Wat:** uniek per organisatie op Message-Id (zonder Message-Id: een hash van afzender, ontvanger, onderwerp, datum en
+  Mailgun-timestamp). Een registratie die halverwege faalde (`afgerond = false`), wordt bij de volgende poging afgemaakt in
+  plaats van als duplicaat genegeerd. De factuur krijgt het id van de bijlage, dus een nieuwe poging van de worker maakt nooit
+  een tweede factuur.
+- **Handtekening:** maximaal 12 uur oud (Mailgun probeert tot 8 uur opnieuw). Geen aparte token-administratie tegen replay:
+  een herhaald verzoek levert door de Message-Id niets nieuws op.
+
+### B69. "Bekende afzender" = in de lijst én echt
+- **Wat:** bekend als het From-adres (of het domein, patroon `@domein.nl`) in `inbox_afzenders` staat én Mailgun SPF of DKIM
+  als geslaagd meldt én het geen spam is. Anders: ter beoordeling.
+- **Waarom:** het From-adres is eenvoudig te vervalsen; juist mail "van een bekende leverancier" is het klassieke middel voor
+  factuurfraude. Ook een verwerkte mail van een bekende afzender doorloopt alle controles (o.a. het kritieke signaal bij een
+  afwijkend IBAN).
+- **Vertrouwen bij beoordeling:** de knop vertrouwt alleen het exacte adres, niet het domein (anders zou bij `@gmail.com`
+  iedereen binnenkomen). Een domein voeg je bewust toe bij *Vertrouwde afzenders*.
+- **Rollen:** beoordelen en vertrouwde afzenders beheren kan een controller of beheerder; het ontvangstadres alleen een
+  beheerder. Alle leden zien de inbox (zoals de facturen). Wijzigingen aan adres en afzenders staan in de audit log.
+
+### B70. Facturen uit de mail: geen "ingevoerd door", bron mailbox
+- **Wat:** `maak_factuur_uit_inbox` (security definer, alleen service role) doet wat `sla_factuur_op` doet (leverancier op
+  naam, bekend IBAN alleen vullen als het leeg is, btw-regels, codering historie → AI, signalen), maar met `user_id` leeg,
+  `bron = 'mailbox'` en een verwijzing naar de bijlage. Een bestaande factuur (zelfde leverancier en nummer) geeft
+  "duplicaat" in plaats van een fout.
+- **Functiescheiding:** met een lege invoerder moet nog steeds iemand controleren en een ander goedkeuren (de controleur kan
+  niet goedkeuren). Verwijderen van een mailfactuur kan alleen een beheerder (de regel "eigen factuur" geldt niet).
+- **Herkomst:** `bron` en `inbox_bijlage_id` zijn niet door gebruikers of de service role te zetten (trigger).
+- **Bestand:** de worker kopieert de bijlage naar `{organisatie_id}/{factuur_id}/…`, zodat bewerken via `sla_factuur_op` (die
+  dat pad eist) gewoon werkt; het origineel blijft bij de mail staan.
+
+### B71. Mock: gesimuleerde mail door dezelfde pipeline
+- **Wat:** in mock-modus weigert `inbound-mail` echte mail (406) en maakt `koppeling-actie` (`simuleer_mail`) een mail met een
+  echt PDF (gegenereerd, elke keer een ander factuurnummer). Die gaat door `verwerkMail`, dezelfde functie als de webhook.
+  Bij "bekende afzender" wordt het testdomein aan de vertrouwde afzenders toegevoegd (zichtbaar en gelogd).
+- **Scan:** met `GEMINI_API_KEY` scant Gemini het test-PDF echt; zonder sleutel of met `SCAN_MODUS=mock` gebruikt de mock-scan
+  de gegevens die in het PDF staan. Zo werkt de mock zonder enig extern account.
+
+### B72. Gemini-scan gedeeld door upload en mailbox
+- **Wat:** de modelkeuze, fallback en foutvertaling van `scan-factuur` staan nu in `_shared/geminiScan.ts`; `scan-factuur` en
+  de worker gebruiken dezelfde functie. Meldingen en gedrag van `scan-factuur` zijn ongewijzigd.
+- **Waarom:** de opdracht eist dat bijlagen "door dezelfde scan- en controlepipeline" gaan; twee kopieën zouden uit elkaar
+  gaan lopen. De worker gebruikt een kleiner tijdbudget (55 s) om binnen de looptijd van de functie te blijven.
+
+### B73. Status van een taak terug naar het onderwerp
+- **Wat:** `intern.taak_status_gewijzigd` wordt door `rond_taak_af` en `probeer_taak_opnieuw` aangeroepen. Voor mailbox-taken
+  zet die de bijlage op *Mislukt* (met de fout) of terug op *Wordt verwerkt*. Latere fasen gebruiken dezelfde haak.
+- **Waarom:** de inbox toont de status per bijlage zonder dat de worker aparte administratie hoeft te doen.
+

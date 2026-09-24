@@ -24,7 +24,7 @@ async function functieFout(error: unknown): Promise<KoppelingError> {
   return new KoppelingError("Onbekende fout bij de koppelingsservice.");
 }
 
-async function koppelingActie<T>(actie: string, organisatieId: string, extra: Record<string, unknown> = {}): Promise<T> {
+export async function koppelingActie<T>(actie: string, organisatieId: string, extra: Record<string, unknown> = {}): Promise<T> {
   const { data, error } = await supabase.functions.invoke<T>("koppeling-actie", {
     body: { actie, organisatie_id: organisatieId, ...extra },
   });

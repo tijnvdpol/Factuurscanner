@@ -12,6 +12,7 @@ function factuur(extra: Partial<Factuur>): Factuur {
     signalen: [],
     koppelingen: [],
     euro: GEEN_OMREKENING,
+    herkomst: "upload",
     codering: GEEN_CODERING,
     bestandsnaam: null,
     bestand_pad: null,

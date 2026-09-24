@@ -2,6 +2,7 @@
 // scan-factuur heeft (nog) zijn eigen varianten; dat gedrag blijft ongewijzigd.
 
 import { createClient, type SupabaseClient, type User } from "npm:@supabase/supabase-js@2";
+import { effectieveModus, envNaamModus, type Koppeling, type Modus } from "./koppelingen/modus.ts";
 
 export const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -47,6 +48,18 @@ export function serviceClient(): SupabaseClient {
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if (!supabaseUrl || !serviceKey) throw new Error("SUPABASE_URL of SUPABASE_SERVICE_ROLE_KEY ontbreekt.");
   return createClient(supabaseUrl, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
+}
+
+/** Geldende modus: env (KOPPELING_<NAAM>_MODUS) gaat voor, dan de instelling van de organisatie, anders mock. */
+export async function modusVoor(supabase: SupabaseClient, organisatieId: string, koppeling: Koppeling): Promise<Modus> {
+  const { data, error } = await supabase
+    .from("koppeling_instellingen")
+    .select("modus")
+    .eq("organisatie_id", organisatieId)
+    .eq("koppeling", koppeling)
+    .maybeSingle();
+  if (error) throw new Error(`Instelling van ${koppeling} niet leesbaar: ${error.message}`);
+  return effectieveModus(Deno.env.get(envNaamModus(koppeling)), data?.modus).modus;
 }
 
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void } | undefined;

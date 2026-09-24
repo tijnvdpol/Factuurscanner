@@ -13,3 +13,7 @@ verify_jwt = false
 
 [functions.verwerk-taken]
 verify_jwt = false
+
+# Mailgun roept deze aan; de functie controleert de Mailgun-handtekening zelf.
+[functions.inbound-mail]
+verify_jwt = false

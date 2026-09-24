@@ -14,8 +14,9 @@ import { fout, json, serviceClient } from "../_shared/server.ts";
 import { gelijkGeheim, type Taak, voerTaakUit } from "../_shared/koppelingen/taken.ts";
 import { maakHandlers } from "./handlers.ts";
 
-// Edge Functions hebben een maximale looptijd; binnen dit budget nieuwe taken claimen.
-const TIJDBUDGET_MS = 90_000;
+// Edge Functions hebben een maximale looptijd (150 s op het gratis plan). Binnen dit budget nieuwe taken
+// claimen; een taak zelf duurt hooguit ~60 s (scannen van een mailbijlage), dus samen blijft het eronder.
+const TIJDBUDGET_MS = 60_000;
 const PER_KEER = 5;
 
 Deno.serve(async (req) => {

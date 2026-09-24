@@ -127,7 +127,14 @@ export default function FacturenTabel({
                 const bezig = bezigId === f.id;
                 return (
                   <tr key={f.id} className="border-b border-slate-50 align-top last:border-0 hover:bg-slate-50">
-                    <td className="px-4 py-2.5 text-slate-800">{f.leverancier ?? "—"}</td>
+                    <td className="px-4 py-2.5 text-slate-800">
+                      {f.leverancier ?? "—"}
+                      {f.herkomst === "mailbox" && (
+                        <span title="Binnengekomen via de mailbox" className="ml-1.5 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500">
+                          mail
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 py-2.5 text-slate-600">{f.factuurnummer ?? "—"}</td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-slate-600">{f.factuurdatum ?? "—"}</td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-slate-800">
