@@ -52,7 +52,14 @@ export async function alsGebruiker(db: PGlite, userId: string | null): Promise<v
   await db.exec(userId ? "set role authenticated" : "set role anon");
 }
 
-/** Terug naar de superuser (zoals de SQL Editor / service role). */
+/** Als de service role (zoals een Edge Function met de geheime sleutel), zonder ingelogde gebruiker. */
+export async function alsServiceRole(db: PGlite): Promise<void> {
+  await db.exec("reset role");
+  await db.query("select set_config('request.jwt.claims', '', false)");
+  await db.exec("set role service_role");
+}
+
+/** Terug naar de superuser (zoals de SQL Editor). */
 export async function alsBeheerder(db: PGlite): Promise<void> {
   await db.exec("reset role");
   await db.query("select set_config('request.jwt.claims', '', false)");

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { datumTijd, omschrijving, wijzigingen, type AuditRegel, type WeergaveContext } from "../lib/audit";
+import { BRON_LABELS, datumTijd, omschrijving, wijzigingen, type AuditRegel, type WeergaveContext } from "../lib/audit";
 import { haalFactuurHistorieOp } from "../lib/auditApi";
 
 interface Props {
@@ -14,6 +14,11 @@ const PUNT_KLASSEN: Record<AuditRegel["actie"], string> = {
   update: "bg-slate-400",
   delete: "bg-red-500",
   statuswijziging: "bg-indigo-500",
+  import: "bg-teal-500",
+  verrijking: "bg-teal-500",
+  export: "bg-teal-500",
+  betaling: "bg-teal-500",
+  notificatie: "bg-teal-500",
 };
 
 /** Tijdlijn van een factuur: wie, wat, wanneer, van → naar. */
@@ -51,6 +56,7 @@ export default function HistorieTijdlijn({ factuurId, weergave, versie }: Props)
             <span className={`absolute -left-[1.6rem] top-1.5 h-2.5 w-2.5 rounded-full ring-4 ring-white ${PUNT_KLASSEN[r.actie]}`} />
             <p className="text-xs text-slate-400">
               {datumTijd(r.created_at)} · {wie}
+              {r.bron !== "app" && r.bron !== "systeem" && ` · via ${BRON_LABELS[r.bron] ?? r.bron}`}
             </p>
             <p className="text-sm font-medium text-slate-800">{omschrijving(r, weergave)}</p>
             {r.toelichting && <p className="text-xs italic text-slate-600">“{r.toelichting}”</p>}

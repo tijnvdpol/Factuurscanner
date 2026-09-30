@@ -4,6 +4,10 @@ import FacturenPagina from "./components/FacturenPagina";
 import GrootboekBeheer from "./components/GrootboekBeheer";
 import LedenBeheer from "./components/LedenBeheer";
 import AuditLogPagina from "./components/AuditLogPagina";
+import KoppelingenPagina from "./components/KoppelingenPagina";
+import InboxPagina from "./components/InboxPagina";
+import MeldingenPagina from "./components/MeldingenPagina";
+import BetalingenPagina from "./components/BetalingenPagina";
 import type { WeergaveContext } from "./lib/audit";
 import { rekeningNaam } from "./lib/codering";
 import type { OrganisatieContext } from "./components/OrganisatiePoort";
@@ -12,12 +16,16 @@ import { haalOrgGebruikersOp } from "./lib/organisatieApi";
 import { supabase } from "./lib/supabase";
 import { ROL_LABELS, type Grootboekrekening, type OrgGebruiker, type Rol } from "./types";
 
-type Pagina = "facturen" | "grootboek" | "leden" | "audit";
+type Pagina = "facturen" | "inbox" | "betalingen" | "meldingen" | "grootboek" | "leden" | "koppelingen" | "audit";
 
 const PAGINAS: { sleutel: Pagina; label: string; rollen: Rol[] | null }[] = [
   { sleutel: "facturen", label: "Facturen", rollen: null },
+  { sleutel: "inbox", label: "Inbox", rollen: null },
+  { sleutel: "betalingen", label: "Betalingen", rollen: ["controller", "beheerder"] },
+  { sleutel: "meldingen", label: "Meldingen", rollen: null },
   { sleutel: "grootboek", label: "Grootboekrekeningen", rollen: null },
   { sleutel: "leden", label: "Leden", rollen: ["beheerder"] },
+  { sleutel: "koppelingen", label: "Koppelingen", rollen: ["controller", "beheerder"] },
   { sleutel: "audit", label: "Audit log", rollen: ["controller", "beheerder"] },
 ];
 
@@ -129,6 +137,18 @@ export default function App({ sessie, lidmaatschap, lidmaatschappen, onWissel, o
             magBeheren={lidmaatschap.rol === "beheerder" || lidmaatschap.rol === "controller"}
             onGewijzigd={vernieuwRekeningen}
           />
+        )}
+        {actievePagina === "inbox" && (
+          <InboxPagina organisatieId={organisatieId} rol={lidmaatschap.rol} naamVan={weergave.naamVan} />
+        )}
+        {actievePagina === "betalingen" && (
+          <BetalingenPagina organisatieId={organisatieId} rol={lidmaatschap.rol} naamVan={weergave.naamVan} />
+        )}
+        {actievePagina === "meldingen" && (
+          <MeldingenPagina organisatieId={organisatieId} userId={sessie.user.id} rol={lidmaatschap.rol} naamVan={weergave.naamVan} />
+        )}
+        {actievePagina === "koppelingen" && (
+          <KoppelingenPagina organisatieId={organisatieId} magBeheren={lidmaatschap.rol === "beheerder"} />
         )}
         {actievePagina === "audit" && (
           <AuditLogPagina organisatieId={organisatieId} gebruikers={gebruikers} weergave={weergave} />

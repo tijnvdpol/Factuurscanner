@@ -18,6 +18,7 @@ function regel(extra: Partial<AuditRegel>): AuditRegel {
     nieuw: null,
     user_id: "u1",
     toelichting: null,
+    bron: "app",
     created_at: "2026-09-23T10:00:00Z",
     ...extra,
   };
@@ -92,9 +93,38 @@ describe("auditCsv", () => {
       ctx,
     );
     const [kop, r1, r2] = csv.split("\r\n");
-    expect(kop).toBe("Tijdstip;Gebruiker;Onderdeel;Actie;Omschrijving;Wijzigingen;Toelichting;Record-id");
+    expect(kop).toBe("Tijdstip;Gebruiker;Onderdeel;Actie;Omschrijving;Wijzigingen;Toelichting;Record-id;Bron");
     expect(r1).toContain("anna@example.nl;Factuur;Statuswijziging;Status: Gescand → Afgekeurd;");
     expect(r1).toContain('"Reden afkeuring: — → Fout; opnieuw | Status: Gescand → Afgekeurd"');
     expect(r2).toContain(";systeem;Lid;Aangemaakt;");
+  });
+});
+
+describe("gebeurtenissen van koppelingen", () => {
+  it("omschrijving met bron, zonder van → naar", () => {
+    const mislukt = regel({
+      actie: "export", bron: "boekhouding", user_id: null, toelichting: "Moneybird: 503",
+      nieuw: { taak_id: "t1", soort: "boekhouding", status: "opgegeven", pogingen: 6 },
+    });
+    expect(omschrijving(mislukt, ctx)).toBe("Export (Boekhoudpakket) mislukt");
+    expect(wijzigingen(mislukt, ctx)).toEqual([]);
+    expect(omschrijving(regel({ actie: "verrijking", bron: "vies", nieuw: { status: "gelukt" } }), ctx)).toBe("Verrijking (VIES) gelukt");
+    expect(
+      omschrijving(regel({ actie: "export", nieuw: { status: "wachtrij", omschrijving: "Handmatig opnieuw geprobeerd" } }), ctx),
+    ).toBe("Export (App): Handmatig opnieuw geprobeerd");
+  });
+
+  it("instelling van een koppeling", () => {
+    const r = regel({
+      tabel: "koppeling_instellingen", gewijzigde_velden: ["modus"],
+      oud: { modus: "mock" }, nieuw: { modus: "live", koppeling: "vies" },
+    });
+    expect(omschrijving(r, ctx)).toBe("Koppeling VIES (btw-nummer) gewijzigd");
+    expect(wijzigingen(r, ctx)).toEqual([{ veld: "modus", label: "Modus", van: "Mock", naar: "Live" }]);
+  });
+
+  it("de bron staat in de laatste CSV-kolom", () => {
+    const csv = auditCsv([regel({ actie: "verrijking", bron: "vies", user_id: null, nieuw: { status: "gelukt" } })], ctx);
+    expect(csv.split("\r\n")[1]).toMatch(/;systeem;Factuur;Verrijking;Verrijking \(VIES\) gelukt;;;f1;VIES$/);
   });
 });

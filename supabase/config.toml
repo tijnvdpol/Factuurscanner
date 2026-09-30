@@ -5,3 +5,19 @@ project_id = "factuurscanner"
 # De JWT wordt in de functie zelf gecontroleerd via de Auth-server. De ingebouwde gateway-controle
 # werkt niet met de nieuwe (asymmetrische) JWT-sleutels / publishable keys, dus die staat uit.
 verify_jwt = false
+
+# Koppelingen (fase 4). Ook deze functies controleren zelf wie er aanroept: koppeling-actie via de JWT
+# van de gebruiker, verwerk-taken via het gedeelde geheim WORKER_GEHEIM (aanroep door pg_cron).
+[functions.koppeling-actie]
+verify_jwt = false
+
+[functions.verwerk-taken]
+verify_jwt = false
+
+# Mailgun roept deze aan; de functie controleert de Mailgun-handtekening zelf.
+[functions.inbound-mail]
+verify_jwt = false
+
+# Knoppen in de goedkeuringsmail (via de app, zonder inloggen); de functie controleert het ondertekende token.
+[functions.mail-actie]
+verify_jwt = false

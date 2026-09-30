@@ -138,7 +138,9 @@ export function voorspelSignalen(
     });
   }
 
-  const limiet = netOnderLimiet(factuur.totaal_incl, context.limieten);
+  // Bij vreemde valuta is het bedrag in euro pas na het ophalen van de koers bekend (database).
+  const inEuro = (factuur.valuta ?? "EUR").trim().toUpperCase() === "EUR";
+  const limiet = inEuro ? netOnderLimiet(factuur.totaal_incl, context.limieten) : null;
   if (limiet !== null) {
     signalen.push({
       type: "net_onder_limiet",
@@ -173,6 +175,8 @@ export const SIGNAAL_LABELS: Record<SignaalType, string> = {
   rond_bedrag: "Rond bedrag",
   net_onder_limiet: "Net onder limiet",
   validatiefout: "Validatiefout",
+  btw_vies_ongeldig: "Btw-nummer ongeldig (VIES)",
+  kvk_afwijking: "Afwijking KvK",
 };
 
 /** Aantal open signalen per ernst, voor de badges in de lijst. */

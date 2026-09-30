@@ -3,8 +3,21 @@
 import { ROL_LABELS, STATUS_LABELS, type FactuurStatus, type Rol } from "../types";
 import { SIGNAAL_LABELS } from "./signalen";
 import { formatBedrag } from "./getallen";
+import { KOPPELING_INFO, type Koppeling } from "./koppelingen";
 
-export type AuditActie = "insert" | "update" | "delete" | "statuswijziging";
+export type AuditActie =
+  | "insert"
+  | "update"
+  | "delete"
+  | "statuswijziging"
+  | "import"
+  | "verrijking"
+  | "export"
+  | "betaling"
+  | "notificatie";
+
+/** Waar een regel vandaan komt: de app zelf, een koppeling, of het systeem (geen gebruiker). */
+export type AuditBron = "app" | "systeem" | "mailbox" | "vies" | "ecb" | "kvk" | "boekhouding" | "betaling" | "email";
 
 export interface AuditRegel {
   id: number;
@@ -17,6 +30,7 @@ export interface AuditRegel {
   nieuw: Record<string, unknown> | null;
   user_id: string | null;
   toelichting: string | null;
+  bron: AuditBron;
   created_at: string;
 }
 
@@ -25,7 +39,31 @@ export const ACTIE_LABELS: Record<AuditActie, string> = {
   update: "Gewijzigd",
   delete: "Verwijderd",
   statuswijziging: "Statuswijziging",
+  import: "Import",
+  verrijking: "Verrijking",
+  export: "Export",
+  betaling: "Betaling",
+  notificatie: "Notificatie",
 };
+
+export const BRON_LABELS: Record<AuditBron, string> = {
+  app: "App",
+  systeem: "Systeem",
+  mailbox: "Mailbox",
+  vies: "VIES",
+  ecb: "ECB",
+  kvk: "KvK",
+  boekhouding: "Boekhoudpakket",
+  betaling: "Bank",
+  email: "E-mail",
+};
+
+/** Gebeurtenissen van koppelingen: geen rijwijziging, maar een actie (export, verrijking, …). */
+const GEBEURTENIS_ACTIES = new Set<AuditActie>(["import", "verrijking", "export", "betaling", "notificatie"]);
+
+export function isGebeurtenis(regel: Pick<AuditRegel, "actie">): boolean {
+  return GEBEURTENIS_ACTIES.has(regel.actie);
+}
 
 export const TABEL_LABELS: Record<string, string> = {
   facturen: "Factuur",
@@ -33,6 +71,12 @@ export const TABEL_LABELS: Record<string, string> = {
   leveranciers: "Leverancier",
   factuur_signalen: "Signaal",
   organisatie_leden: "Lid",
+  koppeling_instellingen: "Koppeling",
+  koppeling_taken: "Koppelingstaak",
+  verificaties: "Verificatie",
+  inbox_adressen: "Ontvangstadres",
+  inbox_afzenders: "Vertrouwde afzender",
+  inbox_berichten: "Inbox",
 };
 
 export const VELD_LABELS: Record<string, string> = {
@@ -75,13 +119,36 @@ export const VELD_LABELS: Record<string, string> = {
   toelichting: "Toelichting",
   rol: "Rol",
   goedkeuringslimiet: "Goedkeuringslimiet",
+  koppeling: "Koppeling",
+  modus: "Modus",
+  config: "Instellingen",
+  bedrag_eur: "Bedrag in euro",
+  koers: "Wisselkoers",
+  koers_datum: "Koersdatum",
+  koers_bron: "Bron koers",
+  uitkomst: "Uitkomst",
+  bron: "Bron",
+  opgevraagd_op: "Opgevraagd op",
+  adres: "Adres",
+  patroon: "Afzender",
+  omschrijving: "Omschrijving",
+  toegevoegd_door: "Toegevoegd door",
 };
 
-const GEBRUIKER_VELDEN = new Set(["gecontroleerd_door", "goedgekeurd_door", "opgelost_door", "user_id"]);
-const BEDRAG_VELDEN = new Set(["bedrag_excl", "totaal_incl", "grondslag", "btw_bedrag", "goedkeuringslimiet"]);
-const TIJD_VELDEN = new Set(["gecontroleerd_op", "goedgekeurd_op", "betaald_op", "opgelost_op", "created_at"]);
+const UITKOMST_LABELS: Record<string, string> = {
+  geldig: "geldig",
+  ongeldig: "ongeldig",
+  gevonden: "gevonden",
+  niet_gevonden: "niet gevonden",
+  uitgeschreven: "uitgeschreven",
+};
+
+const GEBRUIKER_VELDEN = new Set(["gecontroleerd_door", "goedgekeurd_door", "opgelost_door", "user_id", "toegevoegd_door"]);
+const BEDRAG_VELDEN = new Set(["bedrag_excl", "totaal_incl", "grondslag", "btw_bedrag", "goedkeuringslimiet", "bedrag_eur"]);
+const TIJD_VELDEN = new Set(["gecontroleerd_op", "goedgekeurd_op", "betaald_op", "opgelost_op", "created_at", "opgevraagd_op"]);
 // Technische velden die in de tijdlijn niets toevoegen
-const VERBORGEN_VELDEN = new Set(["id", "organisatie_id", "factuur_id", "created_at", "updated_at", "sleutel", "details", "leverancier_id"]);
+const VERBORGEN_VELDEN = new Set(["id", "organisatie_id", "factuur_id", "created_at", "updated_at", "sleutel", "details", "leverancier_id",
+  "bijgewerkt_door", "bijgewerkt_op"]);
 
 export interface WeergaveContext {
   naamVan: (userId: string) => string | undefined;
@@ -103,6 +170,10 @@ export function formatWaarde(veld: string, waarde: unknown, ctx: WeergaveContext
   if (veld === "grootboekrekening_id" && typeof waarde === "string") return ctx.rekeningNaam(waarde) ?? "onbekende rekening";
   if (veld === "status" && typeof waarde === "string") return STATUS_LABELS[waarde as FactuurStatus] ?? waarde;
   if (veld === "rol" && typeof waarde === "string") return ROL_LABELS[waarde as Rol] ?? waarde;
+  if (veld === "uitkomst" && typeof waarde === "string") return UITKOMST_LABELS[waarde] ?? waarde;
+  if (veld === "koers_bron" && typeof waarde === "string") return waarde === "ecb" ? "ECB" : waarde;
+  if (veld === "koppeling" && typeof waarde === "string") return KOPPELING_INFO[waarde as Koppeling]?.naam ?? waarde;
+  if (veld === "modus" && typeof waarde === "string") return waarde === "live" ? "Live" : waarde === "mock" ? "Mock" : waarde;
   if (veld === "type" && typeof waarde === "string") return SIGNAAL_LABELS[waarde as keyof typeof SIGNAAL_LABELS] ?? waarde;
   if (veld === "tarief" && typeof waarde === "number") return `${formatBedrag(waarde, waarde % 1 === 0 ? 0 : 2)}%`;
   if (veld === "codering_zekerheid" && typeof waarde === "number") return `${Math.round(waarde * 100)}%`;
@@ -122,6 +193,8 @@ export interface Wijziging {
 
 /** De wijzigingen van één logregel als "veld: van → naar" (bij aanmaken/verwijderen alleen de gevulde velden). */
 export function wijzigingen(regel: AuditRegel, ctx: WeergaveContext): Wijziging[] {
+  // Een gebeurtenis heeft geen "van → naar"; de omschrijving en toelichting zeggen wat er gebeurde.
+  if (isGebeurtenis(regel)) return [];
   const rij = regel.nieuw ?? regel.oud ?? {};
   const velden = regel.gewijzigde_velden ?? Object.keys(rij).filter((v) => rij[v] !== null && rij[v] !== "");
   return velden
@@ -137,6 +210,15 @@ export function wijzigingen(regel: AuditRegel, ctx: WeergaveContext): Wijziging[
 /** Korte omschrijving, bijv. "Status: Gescand → Gecontroleerd" of "Signaal opgelost: IBAN afwijkend". */
 export function omschrijving(regel: AuditRegel, ctx: WeergaveContext): string {
   const tabel = TABEL_LABELS[regel.tabel] ?? regel.tabel;
+  if (isGebeurtenis(regel)) {
+    // Bijv. "Export (Boekhoudpakket) mislukt" of "Verrijking (VIES): btw-nummer geldig"
+    const wat = `${ACTIE_LABELS[regel.actie]} (${BRON_LABELS[regel.bron] ?? regel.bron})`;
+    const tekst = typeof regel.nieuw?.omschrijving === "string" ? regel.nieuw.omschrijving : null;
+    if (tekst) return `${wat}: ${tekst}`;
+    if (regel.nieuw?.status === "opgegeven") return `${wat} mislukt`;
+    if (regel.nieuw?.status === "gelukt") return `${wat} gelukt`;
+    return wat;
+  }
   if (regel.actie === "statuswijziging" || (regel.tabel === "facturen" && regel.gewijzigde_velden?.includes("status"))) {
     const van = formatWaarde("status", regel.oud?.status, ctx);
     const naar = formatWaarde("status", regel.nieuw?.status, ctx);
@@ -153,6 +235,17 @@ export function omschrijving(regel: AuditRegel, ctx: WeergaveContext): string {
     const wie = ctx.naamVan(regel.record_id) ?? "gebruiker";
     return `${tabel} ${wie} ${ACTIE_LABELS[regel.actie].toLowerCase()}`;
   }
+  if (regel.tabel === "verificaties" && typeof rij.soort === "string") {
+    const wat = rij.soort === "vies" ? "VIES" : "KvK";
+    const uitkomst = typeof regel.nieuw?.uitkomst === "string" ? `: ${formatWaarde("uitkomst", regel.nieuw.uitkomst, ctx)}` : "";
+    return `Controle ${wat}${typeof rij.sleutel === "string" ? ` ${rij.sleutel}` : ""}${uitkomst}`;
+  }
+  if (regel.tabel === "inbox_afzenders" && typeof rij.patroon === "string") {
+    return `${tabel} ${rij.patroon} ${ACTIE_LABELS[regel.actie].toLowerCase()}`;
+  }
+  if (regel.tabel === "koppeling_instellingen" && typeof rij.koppeling === "string") {
+    return `${tabel} ${formatWaarde("koppeling", rij.koppeling, ctx)} ${ACTIE_LABELS[regel.actie].toLowerCase()}`;
+  }
   if (regel.tabel === "leveranciers" && typeof rij.naam === "string") {
     return `${tabel} ${rij.naam} ${ACTIE_LABELS[regel.actie].toLowerCase()}`;
   }
@@ -165,7 +258,8 @@ function csvVeld(waarde: string): string {
 
 /** CSV (puntkomma, zoals de factuurexport) met één regel per logregel. */
 export function auditCsv(regels: AuditRegel[], ctx: WeergaveContext): string {
-  const kop = ["Tijdstip", "Gebruiker", "Onderdeel", "Actie", "Omschrijving", "Wijzigingen", "Toelichting", "Record-id"];
+  // "Bron" achteraan, zodat bestaande verwerkingen op kolomvolgorde blijven werken
+  const kop = ["Tijdstip", "Gebruiker", "Onderdeel", "Actie", "Omschrijving", "Wijzigingen", "Toelichting", "Record-id", "Bron"];
   const rijen = regels.map((r) =>
     [
       new Date(r.created_at).toISOString(),
@@ -178,6 +272,7 @@ export function auditCsv(regels: AuditRegel[], ctx: WeergaveContext): string {
         .join(" | "),
       r.toelichting ?? "",
       r.record_id ?? "",
+      BRON_LABELS[r.bron] ?? r.bron ?? "",
     ]
       .map(csvVeld)
       .join(";"),

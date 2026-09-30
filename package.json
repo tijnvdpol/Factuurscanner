@@ -9,7 +9,7 @@
     "typecheck": "tsc -b",
     "lint": "oxlint",
     "test": "vitest run",
-    "check:functions": "npx -y deno check --no-lock supabase/functions/scan-factuur/index.ts",
+    "check:functions": "npx -y deno check --no-lock supabase/functions/scan-factuur/index.ts supabase/functions/verwerk-taken/index.ts supabase/functions/koppeling-actie/index.ts supabase/functions/inbound-mail/index.ts supabase/functions/mail-actie/index.ts",
     "preview": "vite preview"
   },
   "dependencies": {

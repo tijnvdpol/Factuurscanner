@@ -1,14 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { euro, filterFacturen, magVerwijderen, mogelijkeActies, valtTerugNaGewijzigd, type WorkflowContext } from "./workflow";
-import { LEGE_WORKFLOW, type Factuur, type FactuurStatus, type Rol, type Signaal } from "../types";
+import { bedragInEuro, euro, filterFacturen, goedkeurBlokkade, magVerwijderen, mogelijkeActies, valtTerugNaGewijzigd, type WorkflowContext } from "./workflow";
+import { GEEN_OMREKENING, LEGE_WORKFLOW, type Factuur, type FactuurStatus, type Rol, type Signaal } from "../types";
 
 const IK = "ik";
 const ANDER = "ander";
 
-function factuur(status: FactuurStatus, extra: Partial<Pick<Factuur, "totaal_incl" | "signalen" | "codering" | "workflow">> = {}) {
+function factuur(
+  status: FactuurStatus,
+  extra: Partial<Pick<Factuur, "totaal_incl" | "valuta" | "euro" | "signalen" | "codering" | "workflow">> = {},
+) {
   return {
     status,
     totaal_incl: 1000,
+    valuta: "EUR" as string | null,
+    euro: GEEN_OMREKENING,
     signalen: [] as Signaal[],
     codering: { grootboekrekening_id: "r1", bron: "handmatig" as const, zekerheid: null },
     workflow: { ...LEGE_WORKFLOW, ingevoerd_door: ANDER, gecontroleerd_door: ANDER },
@@ -116,5 +121,31 @@ describe("overige regels", () => {
   it("euro-notatie", () => {
     expect(euro(5000)).toBe("€ 5.000");
     expect(euro(1234.5)).toBe("€ 1.234,50");
+  });
+});
+
+describe("goedkeuringslimiet in euro", () => {
+  const usd = (bedrag: number | null) =>
+    factuur("gecontroleerd", {
+      valuta: "USD",
+      totaal_incl: 6000,
+      euro: { bedrag, koers: bedrag === null ? null : 1.1622, koers_datum: "2026-09-04", bron: "ecb" },
+    });
+
+  it("vreemde valuta: het omgerekende bedrag telt, niet het getal op de factuur", () => {
+    const c = ctx("goedkeurder", { goedkeuringslimiet: 5000 });
+    expect(bedragInEuro(usd(5162.62))).toBe(5162.62);
+    expect(goedkeurBlokkade(usd(5162.62), c)).toBe("Boven je goedkeuringslimiet van € 5.000");
+    expect(goedkeurBlokkade(usd(4900), c)).toBeNull();
+  });
+
+  it("koers nog onbekend: geblokkeerd bij een limiet, niet zonder limiet", () => {
+    expect(goedkeurBlokkade(usd(null), ctx("goedkeurder", { goedkeuringslimiet: 5000 }))).toMatch(/Wisselkoers nog niet bekend/);
+    expect(goedkeurBlokkade(usd(null), ctx("controller"))).toBeNull();
+  });
+
+  it("euro (of geen valuta): het totaal telt", () => {
+    expect(bedragInEuro(factuur("gecontroleerd", { valuta: null, totaal_incl: 99 }))).toBe(99);
+    expect(bedragInEuro(factuur("gecontroleerd", { valuta: "eur ", totaal_incl: 99 }))).toBe(99);
   });
 });

@@ -42,7 +42,13 @@ export interface MogelijkeActie {
   geblokkeerd: string | null;
 }
 
-type WorkflowFactuur = Pick<Factuur, "status" | "totaal_incl" | "signalen" | "codering" | "workflow">;
+type WorkflowFactuur = Pick<Factuur, "status" | "totaal_incl" | "valuta" | "euro" | "signalen" | "codering" | "workflow">;
+
+/** Bedrag in euro dat telt voor de goedkeuringslimiet; null = (nog) onbekend. Zelfde regel als intern.bedrag_in_euro. */
+export function bedragInEuro(factuur: Pick<Factuur, "totaal_incl" | "valuta" | "euro">): number | null {
+  const valuta = (factuur.valuta ?? "EUR").trim().toUpperCase();
+  return valuta === "EUR" ? factuur.totaal_incl : factuur.euro.bedrag;
+}
 
 export function euro(bedrag: number): string {
   return `€ ${formatBedrag(bedrag, Number.isInteger(bedrag) ? 0 : 2)}`;
@@ -59,7 +65,9 @@ export function goedkeurBlokkade(factuur: WorkflowFactuur, ctx: WorkflowContext)
   }
   if (ctx.goedkeuringslimiet !== null) {
     if (factuur.totaal_incl === null) return "Totaalbedrag ontbreekt";
-    if (factuur.totaal_incl > ctx.goedkeuringslimiet) {
+    const inEuro = bedragInEuro(factuur);
+    if (inEuro === null) return "Wisselkoers nog niet bekend (wordt opgehaald)";
+    if (inEuro > ctx.goedkeuringslimiet) {
       return `Boven je goedkeuringslimiet van ${euro(ctx.goedkeuringslimiet)}`;
     }
   }
@@ -91,8 +99,27 @@ export function mogelijkeActies(factuur: WorkflowFactuur, ctx: WorkflowContext):
     });
 }
 
-/** Mag de gebruiker de factuur verwijderen? (beheerder altijd; anders eigen factuur in gescand/afgekeurd) */
-export function magVerwijderen(factuur: Pick<Factuur, "status" | "workflow">, ctx: WorkflowContext): boolean {
+/**
+ * Waarom de factuur niet meer inhoudelijk te wijzigen is (zelfde regels als de databasetriggers), of null.
+ * Betaald = afgesloten (B38); geëxporteerd = correcties via de boekhouding (fase 4.5).
+ */
+export function vergrendeling(factuur: Pick<Factuur, "status"> & { geexporteerd_op?: string | null }): string | null {
+  if (factuur.status === "in_betaalbatch") {
+    return "Deze factuur zit in een betaalbatch en kan niet worden gewijzigd. Annuleer eerst de batch (pagina Betalingen).";
+  }
+  if (factuur.geexporteerd_op) {
+    return "Deze factuur is geëxporteerd naar het boekhoudpakket en kan niet meer worden gewijzigd. Correcties lopen via de boekhouding.";
+  }
+  if (factuur.status === "betaald") return "Deze factuur is betaald en kan niet meer worden gewijzigd.";
+  return null;
+}
+
+/** Mag de gebruiker de factuur verwijderen? (niet na export; beheerder verder altijd; anders eigen factuur in gescand/afgekeurd) */
+export function magVerwijderen(
+  factuur: Pick<Factuur, "status" | "workflow"> & { geexporteerd_op?: string | null },
+  ctx: WorkflowContext,
+): boolean {
+  if (factuur.geexporteerd_op || factuur.status === "in_betaalbatch") return false;
   if (ctx.rol === "beheerder") return true;
   return factuur.workflow.ingevoerd_door === ctx.userId && (factuur.status === "gescand" || factuur.status === "afgekeurd");
 }
@@ -115,12 +142,13 @@ export function valtTerugNaGewijzigd(
   );
 }
 
-export type Filter = "te_controleren" | "te_keuren" | "te_betalen" | "afgekeurd" | "alles";
+export type Filter = "te_controleren" | "te_keuren" | "te_betalen" | "in_betaling" | "afgekeurd" | "alles";
 
 export const FILTERS: { sleutel: Filter; label: string; status: FactuurStatus | null }[] = [
   { sleutel: "te_controleren", label: "Te controleren", status: "gescand" },
   { sleutel: "te_keuren", label: "Te keuren", status: "gecontroleerd" },
   { sleutel: "te_betalen", label: "Te betalen", status: "goedgekeurd" },
+  { sleutel: "in_betaling", label: "In betaling", status: "in_betaalbatch" },
   { sleutel: "afgekeurd", label: "Afgekeurd", status: "afgekeurd" },
   { sleutel: "alles", label: "Alles", status: null },
 ];

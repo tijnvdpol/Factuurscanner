@@ -10,7 +10,7 @@ Voorwaarde (stap 1) was aanwezig: migraties voor `leveranciers`/`facturen`/`btw_
 |---|---|---|
 | 2.1 Extra velden en validatie | ✅ | `scan-factuur` extraheerde vervaldatum, IBAN, btw- en KvK-nummer al (stap 1). Nieuw: validatiemodule `src/lib/veldvalidatie.ts` (IBAN-lengte per land + mod-97, NL-btw-formaat, KvK = 8 cijfers, vervaldatum ≥ factuurdatum), inline getoond. |
 | 2.2 Signalen | ✅ | Tabel `factuur_signalen`. Bepaald bij elke save in Postgres: mogelijk duplicaat, IBAN afwijkend (kritiek), nieuwe leverancier, rond bedrag, validatiefout. Het IBAN wordt per factuur bewaard; het bekende IBAN van de leverancier wordt nooit automatisch overschreven. "Oplossen" met verplichte toelichting en een optie om het nieuwe IBAN over te nemen. Badges per ernst in de lijst, een signalenblok in het bewerkscherm en een voorproef vóór het opslaan. |
-| 2.3 Coderingsvoorstel | ✅ | Tabel `grootboekrekeningen` met een standaardset van 16 rekeningen (trigger + backfill). Voorstel: eerst historie (meest gebruikte handmatig bevestigde rekening), anders AI (Gemini kiest uit de actieve rekeningen, in dezelfde scan-aanroep). Label "Voorgesteld (historie/AI, xx%)" met knop Bevestigen. Beheerscherm voor rekeningen. Twee nieuwe kolommen in de CSV-export. |
+| 2.3 Coderingsvoorstel | ✅ | Tabel `grootboekrekeningen` met een standaardset van 16 rekeningen (trigger + backfill). Voorstel: eerst historie (meest gebruikte handmatig bevestigde rekening), anders AI (OpenAI kiest uit de actieve rekeningen, in dezelfde scan-aanroep). Label "Voorgesteld (historie/AI, xx%)" met knop Bevestigen. Beheerscherm voor rekeningen. Twee nieuwe kolommen in de CSV-export. |
 | 3.1 Organisaties en rollen | ✅ | `organisaties` en `organisatie_leden` (4 rollen + goedkeuringslimiet). Backfill: een persoonlijke organisatie per gebruiker. `organisatie_id` op alle tabellen. RLS via `is_lid`/`heeft_rol` (security definer). Storage onder `{organisatie_id}/…`, met oude paden leesbaar. Trigger op `auth.users` plus een vangnet bij de eerste login. Ledenbeheer (alleen beheerder, laatste beheerder beschermd) en een organisatiekiezer in de header. |
 | 3.2 Statusworkflow | ✅ | Statussen inclusief `afgekeurd`, workflowkolommen, en `wijzig_status()` die rol, functiescheiding, limiet, kritieke signalen en grootboekrekening controleert. Status is niet direct te wijzigen (kolomrechten + trigger). Automatische terugval naar gescand na een inhoudelijke wijziging (ook btw-regels). Uitzondering voor een organisatie met één lid, met melding. Signaal `net_onder_limiet`. UI: tabs, knoppen per rol en de reden bij een blokkade. |
 | 3.3 Audit trail | ✅ | `audit_log`, alleen te vullen via triggers op 5 tabellen; bij updates alleen de gewijzigde velden. UPDATE/DELETE/TRUNCATE geweigerd, ook voor de service role. Tab "Historie" per factuur (tijdlijn, van → naar, Nederlandse veldnamen) en een scherm "Audit log" (controller/beheerder) met filters en CSV-export. |
@@ -48,7 +48,7 @@ Alle keuzes staan in [`docs/beslissingen.md`](beslissingen.md) (B1–B50). De vi
 
 **Niet getest (kon niet zonder Docker of productie):**
 - Tegen een echte Supabase-stack: PostgREST (embeddings; ik heb expliciete FK-hints toegevoegd om ambiguïteit te voorkomen), de echte Storage-API, de Auth-trigger met de rol `supabase_auth_admin` en Postgres 15/17. De gebruikte features (`nulls not distinct`, `on delete set null (kolom)`) werken vanaf Postgres 15.
-- De Edge Function end-to-end met Gemini (geen API-sleutel lokaal). De prompt, het schema en de verwerking van het antwoord zijn wel unit-getest en de functie is typecorrect.
+- De Edge Function end-to-end met OpenAI (geen API-sleutel lokaal). De prompt, het schema en de verwerking van het antwoord zijn wel unit-getest en de functie is typecorrect.
 - De UI in een browser. Typecheck, lint en build slagen, maar er is niet geklikt. Doorloop daarvoor het testscenario in §5.
 
 **Aangepast bestaand testscript:** in `supabase/handtests/fase1_rls.sql` zijn test 7b, 8, 9, 10a, 12a en 16 aangepast aan bewust veranderd gedrag: het IBAN wordt niet meer overschreven, de status gaat alleen via `wijzig_status`, en een factuur hoort bij een organisatie.
@@ -75,7 +75,7 @@ Alle keuzes staan in [`docs/beslissingen.md`](beslissingen.md) (B1–B50). De vi
    ```powershell
    npx.cmd supabase functions deploy scan-factuur --use-api --project-ref apehfdoikvbnyuutnutq
    ```
-3. **Secrets en env-variabelen:** geen nieuwe. `GEMINI_API_KEY` (en optioneel `GEMINI_MODELLEN`) blijven zoals ze zijn. `.env.example` hoefde niet te veranderen.
+3. **Secrets en env-variabelen:** geen nieuwe. `OPENAI_API_KEY` (en optioneel `OPENAI_MODELLEN`) blijven zoals ze zijn. `.env.example` hoefde niet te veranderen.
 4. **Branch pushen en mergen:**
    ```powershell
    git push -u origin feature/stap-2-3

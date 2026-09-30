@@ -1,3 +1,5 @@
+import type { KoppelingTaakStatus } from "./lib/koppelingen";
+
 export interface BtwRegel {
   tarief: number | null;
   grondslag: number | null;
@@ -18,13 +20,14 @@ export interface FactuurData {
   kvk_nummer: string | null;
 }
 
-export const STATUSSEN = ["gescand", "gecontroleerd", "goedgekeurd", "betaald", "afgekeurd"] as const;
+export const STATUSSEN = ["gescand", "gecontroleerd", "goedgekeurd", "in_betaalbatch", "betaald", "afgekeurd"] as const;
 export type FactuurStatus = (typeof STATUSSEN)[number];
 
 export const STATUS_LABELS: Record<FactuurStatus, string> = {
   gescand: "Gescand",
   gecontroleerd: "Gecontroleerd",
   goedgekeurd: "Goedgekeurd",
+  in_betaalbatch: "In betaalbatch",
   betaald: "Betaald",
   afgekeurd: "Afgekeurd",
 };
@@ -36,6 +39,8 @@ export const SIGNAAL_TYPES = [
   "rond_bedrag",
   "net_onder_limiet",
   "validatiefout",
+  "btw_vies_ongeldig",
+  "kvk_afwijking",
 ] as const;
 export type SignaalType = (typeof SIGNAAL_TYPES)[number];
 export type SignaalErnst = "info" | "waarschuwing" | "kritiek";
@@ -85,7 +90,26 @@ export interface Factuur extends FactuurData {
   ai_model: string | null;
   aangemaaktOp: string;
   workflow: Workflow;
+  euro: EuroOmrekening;
+  /** upload = gescand in de app; mailbox = uit een gemailde bijlage (dan is "ingevoerd door" leeg) */
+  herkomst: "upload" | "mailbox";
+  /** Geëxporteerd naar het boekhoudpakket (tijdstip); daarna inhoudelijk vergrendeld. */
+  geexporteerd_op: string | null;
+  /** Laatste taak per koppeling (VIES, export, …); leeg als er niets loopt of de status niet geladen kon worden. */
+  koppelingen: KoppelingTaakStatus[];
 }
+
+/** Omrekening naar euro (ECB-koers). Bij EUR is bedrag gelijk aan het totaal en is er geen koers. */
+export interface EuroOmrekening {
+  /** null = de koers is (nog) niet bekend */
+  bedrag: number | null;
+  /** eenheden vreemde valuta per 1 euro */
+  koers: number | null;
+  koers_datum: string | null;
+  bron: "ecb" | "mock" | null;
+}
+
+export const GEEN_OMREKENING: EuroOmrekening = { bedrag: null, koers: null, koers_datum: null, bron: null };
 
 /** Wie deed wat in de statusworkflow (user-id's en tijdstippen). */
 export interface Workflow {

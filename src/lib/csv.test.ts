@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { genereerCsv } from "./csv";
-import { GEEN_CODERING, LEGE_WORKFLOW, legeFactuurData, type Factuur } from "../types";
+import { GEEN_CODERING, GEEN_OMREKENING, LEGE_WORKFLOW, legeFactuurData, type Factuur } from "../types";
 
 function factuur(extra: Partial<Factuur>): Factuur {
   return {
@@ -10,6 +10,10 @@ function factuur(extra: Partial<Factuur>): Factuur {
     factuurnummer: "H-1",
     leverancier_iban: null,
     signalen: [],
+    koppelingen: [],
+    euro: GEEN_OMREKENING,
+    herkomst: "upload",
+    geexporteerd_op: null,
     codering: GEEN_CODERING,
     bestandsnaam: null,
     bestand_pad: null,
