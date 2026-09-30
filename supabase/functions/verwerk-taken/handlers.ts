@@ -14,6 +14,7 @@ import { boekhoudHandler } from "../_shared/koppelingen/boekhouding.ts";
 import { kiesBoekhoudProvider } from "../_shared/koppelingen/boekhoudProvider.ts";
 import { BankMock, betalingHandler } from "../_shared/koppelingen/bank.ts";
 import { mimeTypeVoor, scanMetOpenAI } from "../_shared/openaiScan.ts";
+import { metDagLimiet } from "../_shared/scanLimiet.ts";
 import type { Rekening } from "../_shared/scanSchema.ts";
 
 const BUCKET = "facturen";
@@ -80,14 +81,16 @@ function mailboxDeps(supabase: SupabaseClient) {
         .eq("organisatie_id", bijlage.organisatie_id)
         .eq("actief", true)
         .order("code");
-      return scanMetOpenAI({
-        bytes: inhoud,
-        mimeType: mimeTypeVoor(bijlage.bestandsnaam, bijlage.mime_type ?? ""),
-        rekeningen: (rekeningen ?? []) as Rekening[],
-        openaiKey: Deno.env.get("OPENAI_API_KEY")!,
-        start: Date.now(),
-        tijdbudgetMs: SCAN_BUDGET_MS,
-      });
+      return metDagLimiet(supabase, bijlage.organisatie_id, () =>
+        scanMetOpenAI({
+          bytes: inhoud,
+          mimeType: mimeTypeVoor(bijlage.bestandsnaam, bijlage.mime_type ?? ""),
+          rekeningen: (rekeningen ?? []) as Rekening[],
+          openaiKey: Deno.env.get("OPENAI_API_KEY")!,
+          start: Date.now(),
+          tijdbudgetMs: SCAN_BUDGET_MS,
+        })
+      );
     },
     rpc: async (functie, args) => {
       const { data, error } = await supabase.rpc(functie, args);

@@ -12,12 +12,14 @@
 // De OpenAI-aanroep (modelkeuze met automatische fallback) staat in _shared/openaiScan.ts, zodat de
 // mailbox-import (verwerk-taken) exact dezelfde pipeline gebruikt.
 //
-// Secrets: OPENAI_API_KEY (zelf instellen), optioneel OPENAI_MODELLEN (kommagescheiden voorkeursvolgorde).
-// SUPABASE_URL en SUPABASE_ANON_KEY zet Supabase automatisch.
+// Secrets: OPENAI_API_KEY (zelf instellen), optioneel OPENAI_MODELLEN (kommagescheiden voorkeursvolgorde) en
+// SCAN_LIMIET_PER_DAG (standaard 5 scans per organisatie per dag, zie _shared/scanLimiet.ts).
+// SUPABASE_URL, SUPABASE_ANON_KEY en SUPABASE_SERVICE_ROLE_KEY zet Supabase automatisch.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import type { Rekening } from "../_shared/scanSchema.ts";
 import { mimeTypeVoor, scanMetOpenAI } from "../_shared/openaiScan.ts";
+import { metDagLimiet } from "../_shared/scanLimiet.ts";
 
 const BUCKET = "facturen";
 const MAX_BYTES = 15 * 1024 * 1024;
@@ -49,11 +51,13 @@ Deno.serve(async (req) => {
   const openaiKey = Deno.env.get("OPENAI_API_KEY");
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? req.headers.get("apikey");
-  if (!openaiKey || !supabaseUrl || !anonKey) {
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!openaiKey || !supabaseUrl || !anonKey || !serviceKey) {
     console.error("Configuratie ontbreekt", {
       OPENAI_API_KEY: !!openaiKey,
       SUPABASE_URL: !!supabaseUrl,
       SUPABASE_ANON_KEY: !!anonKey,
+      SUPABASE_SERVICE_ROLE_KEY: !!serviceKey,
     });
     return fout(500, "De scanservice is niet goed geconfigureerd (ontbreekt de OPENAI_API_KEY?).");
   }
@@ -107,15 +111,22 @@ Deno.serve(async (req) => {
   if (rekeningFout) console.warn("Grootboekrekeningen ophalen mislukt:", rekeningFout.message);
   const rekeningen: Rekening[] = rekeningData ?? [];
 
-  // 4. OpenAI aanroepen; bij een onbereikbaar model automatisch het volgende proberen
-  const uitkomst = await scanMetOpenAI({
-    bytes: new Uint8Array(await blob.arrayBuffer()),
-    mimeType: mimeTypeVoor(pad, blob.type),
-    rekeningen,
-    openaiKey,
-    start,
-    tijdbudgetMs: TIJDBUDGET_MS,
-  });
+  // 4. Daglimiet per organisatie (zonder lidmaatschap per gebruiker), daarna OpenAI aanroepen;
+  //    bij een onbereikbaar model automatisch het volgende proberen
+  const { data: isLid } = await supabase.rpc("is_lid", { p_organisatie_id: organisatieId });
+  const limietSleutel = isLid === true ? organisatieId : gebruiker.id;
+  const beheer = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const uitkomst = await metDagLimiet(beheer, limietSleutel, () =>
+    scanMetOpenAI({
+      bytes,
+      mimeType: mimeTypeVoor(pad, blob.type),
+      rekeningen,
+      openaiKey,
+      start,
+      tijdbudgetMs: TIJDBUDGET_MS,
+    })
+  );
   if (!uitkomst.ok) return fout(uitkomst.status, uitkomst.melding);
   return json(200, { factuur: uitkomst.factuur, model: uitkomst.model, codering: uitkomst.codering });
 });

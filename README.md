@@ -88,6 +88,7 @@ Goedkeuren kan niet voor een factuur die je zelf hebt ingevoerd of gecontroleerd
      - Ze schakelt naar het volgende model als een model niet beschikbaar is, de limiet heeft bereikt, overbelast is of niet op tijd reageert. Een model dat niet bestaat of geen toegang geeft, wordt daarna een uur overgeslagen.
    - Optioneel stel je een eigen voorkeursvolgorde in met het secret `OPENAI_MODELLEN`, bijvoorbeeld `gpt-5-mini,gpt-4.1-mini`. Kies modellen met beeld/PDF-invoer en Structured Outputs.
    - HEIC-foto's worden door OpenAI niet ondersteund; upload JPG, PNG, WEBP of PDF.
+   - **Daglimiet:** standaard maximaal 5 AI-scans per organisatie per dag (Nederlandse tijd), voor uploads én mailbijlagen samen. Pas dat aan met het secret `SCAN_LIMIET_PER_DAG`. Een mislukte scan telt niet mee. De teller staat in de database (migratie `20260930100000_scan_limiet.sql`, draai `supabase db push` of voer dat bestand uit in de SQL Editor).
 7. **Edge Function deployen** (vanuit deze map, commando's één voor één):
    ```powershell
    npx.cmd supabase login
