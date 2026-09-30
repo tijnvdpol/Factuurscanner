@@ -46,6 +46,11 @@ export function mimeTypeVoor(pad: string, blobType: string): string {
   return MIME_TYPES[extensie] ?? "application/octet-stream";
 }
 
+/** Haalt sleutel-achtige tekst uit een foutmelding van OpenAI, voor het geval die in de melding staat. */
+function zonderSleutel(melding: string): string {
+  return melding.replace(/sk-[A-Za-z0-9_*.-]+/g, "sk-…").slice(0, 250);
+}
+
 const overslaanTot = new Map<string, number>(); // model -> tijdstip; voor modellen die "niet beschikbaar" gaven
 
 /** Volgorde van te proberen modellen: OPENAI_MODELLEN, of de standaardlijst. */
@@ -104,13 +109,15 @@ async function scanMetModel(model: string, openaiKey: string, body: Record<strin
     } catch {
       // negeren, gebruik generieke melding
     }
-    // 404: model bestaat niet of geen toegang; 408/429: time-out of limiet; 5xx: storing/overbelast;
+    // 404 of 403: model bestaat niet of het project heeft er geen toegang toe; 408/429: time-out of limiet; 5xx: storing/overbelast;
     // 400 alleen als het aan het model ligt (niet-ondersteunde functie). Andere fouten (bijv. ongeldige
     // sleutel of onleesbaar bestand) gelden voor elk model. Geen tegoed (insufficient_quota) geldt voor alle.
     const geenTegoed = code === "insufficient_quota";
     const volgendeProberen = !geenTegoed && (
       response.status === 404 || response.status === 408 || response.status === 429 || response.status >= 500 ||
-      (response.status === 400 && /model|unsupported/i.test(melding))
+      (response.status === 400 && /model|unsupported/i.test(melding)) ||
+      // 403 "Project … does not have access to model …": ligt aan het model, een ander model kan wel.
+      (response.status === 403 && /access to model|model .*(not|does not)/i.test(melding))
     );
     return { ok: false, status: response.status, melding, code, volgendeProberen };
   }
@@ -165,7 +172,9 @@ export async function scanMetOpenAI(opties: {
   start: number;
   tijdbudgetMs: number;
 }): Promise<ScanUitkomst> {
-  const { rekeningen, openaiKey, start, tijdbudgetMs, mimeType } = opties;
+  const { rekeningen, start, tijdbudgetMs, mimeType } = opties;
+  // Spaties, aanhalingstekens of regeleinden om de sleutel heen (bij het instellen van het secret) weghalen.
+  const openaiKey = opties.openaiKey.trim().replace(/^["']|["']$/g, "");
 
   const isPdf = mimeType === "application/pdf";
   if (!isPdf && !AFBEELDING_OK.has(mimeType)) {
@@ -202,14 +211,18 @@ export async function scanMetOpenAI(opties: {
 
     console.error(`OpenAI-fout bij ${model}`, poging.status, poging.melding);
     mislukt.push({ ...poging, model });
-    if (poging.status === 404) overslaanTot.set(model, Date.now() + CACHE_MS);
+    if (poging.status === 404 || (poging.status === 403 && poging.volgendeProberen)) overslaanTot.set(model, Date.now() + CACHE_MS);
 
     if (poging.code === "insufficient_quota") {
       return { ok: false, status: 402, melding: "Het OpenAI-tegoed van de scanservice is op. Vul het tegoed aan en probeer opnieuw." };
     }
     if (!poging.volgendeProberen) {
       if (poging.status === 401 || poging.status === 403) {
-        return { ok: false, status: 500, melding: "De OpenAI API-sleutel van de scanservice is ongeldig of heeft geen toegang." };
+        return {
+          ok: false,
+          status: 500,
+          melding: `De OpenAI API-sleutel van de scanservice is ongeldig of heeft geen toegang (${zonderSleutel(poging.melding)}).`,
+        };
       }
       return { ok: false, status: 502, melding: poging.melding };
     }
