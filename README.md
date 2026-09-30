@@ -1,13 +1,13 @@
 # Factuurscanner
 
-Scan facturen (PDF/foto), laat Google Gemini de velden herkennen, controleer ze en exporteer naar CSV.
+Scan facturen (PDF/foto), laat OpenAI (ChatGPT API) de velden herkennen, controleer ze en exporteer naar CSV.
 Met signalen (duplicaten, afwijkend IBAN e.d.), een coderingsvoorstel (grootboekrekening), organisaties
 met rollen, een goedkeuringsworkflow met functiescheiding, een audit trail en koppelingen (zie
 [Koppelingen](#koppelingen)).
 
 - **Frontend:** React + TypeScript + Tailwind (Vite), gehost op Vercel
 - **Backend:** Supabase: Postgres met Row Level Security, Auth (e-mail + wachtwoord), Storage (bucket `facturen`) en Edge Function `scan-factuur`
-- **AI:** Gemini, alleen server-side aangeroepen. De API-sleutel staat als Supabase secret en komt nooit in de browser.
+- **AI:** OpenAI, alleen server-side aangeroepen. De API-sleutel staat als Supabase secret en komt nooit in de browser.
 
 ## Projectstructuur
 
@@ -16,15 +16,15 @@ met rollen, een goedkeuringsworkflow met functiescheiding, een audit trail en ko
 | `src/` | Frontend |
 | `src/lib/facturenApi.ts` | Database-aanroepen (lijst, opslaan via RPC, verwijderen, import) |
 | `src/lib/opslag.ts` | Storage (upload, signed URL, verwijderen) |
-| `src/lib/gemini.ts` | Aanroep van de Edge Function |
+| `src/lib/scan.ts` | Aanroep van de Edge Function |
 | `supabase/migrations/` | SQL-migraties (tabellen, RLS, RPC `sla_factuur_op`, Storage-bucket en -policies) |
-| `supabase/functions/scan-factuur/` | Edge Function (Deno) die Gemini aanroept, met automatische fallback naar een ander model |
-| `supabase/functions/_shared/gemini.ts` | Prompt, responsschema en normalisatie |
+| `supabase/functions/scan-factuur/` | Edge Function (Deno) die OpenAI aanroept, met automatische fallback naar een ander model |
+| `supabase/functions/_shared/scanSchema.ts` | Prompt, responsschema en normalisatie |
 | `supabase/functions/verwerk-taken/` | Worker voor de takenwachtrij van de koppelingen (aangeroepen door pg_cron) |
 | `supabase/functions/koppeling-actie/` | Acties op koppelingen vanuit de app (overzicht, wachtrij testen, testmail, …) |
 | `supabase/functions/inbound-mail/` | Webhook voor inkomende mail (Mailgun) |
 | `supabase/functions/mail-actie/` | Knoppen Goedkeuren/Afkeuren uit een goedkeuringsmail (ondertekend, eenmalig token) |
-| `supabase/functions/_shared/geminiScan.ts` | Gemini-scan met modelkeuze en fallback (gedeeld door scan-factuur en de mailbox) |
+| `supabase/functions/_shared/openaiScan.ts` | OpenAI-scan met modelkeuze en fallback (gedeeld door scan-factuur en de mailbox) |
 | `supabase/functions/_shared/koppelingen/` | Gedeelde, testbare logica van de koppelingen (modus, taken, adapters) |
 | `supabase/handtests/` | Testscripts voor de SQL Editor (`fase1_rls.sql`, `fase2_3_workflow.sql`, `fase4_1_koppelingen.sql` t/m `fase4_7_reporting.sql`) |
 | `supabase/tests/` | Geautomatiseerde databasetests (Vitest + PGlite, geen Docker nodig) |
@@ -82,12 +82,12 @@ Goedkeuren kan niet voor een factuur die je zelf hebt ingevoerd of gecontroleerd
    - Site URL: de productie-URL (Vercel)
    - Redirect URLs: `http://localhost:5173` en de Vercel-URL
    - "Confirm email" aan laten
-6. **Secret zetten**: onder *Edge Functions → Secrets* een secret `GEMINI_API_KEY` aanmaken.
+6. **Secret zetten**: onder *Edge Functions → Secrets* een secret `OPENAI_API_KEY` aanmaken (sleutel maak je op <https://platform.openai.com/api-keys>; de API heeft eigen tegoed onder *Billing*, los van een ChatGPT-abonnement).
    - Het model wordt automatisch gekozen:
-     - De functie vraagt bij Google op welke modellen beschikbaar zijn en bewaart die lijst een uur.
-     - Ze probeert eerst `gemini-3.6-flash`, daarna de overige stabiele Flash-modellen (nieuwste eerst, lite-varianten achteraan), met maximaal 4 pogingen.
-     - Ze schakelt naar het volgende model als een model is ingetrokken, de limiet heeft bereikt, overbelast is of niet op tijd reageert. Een ingetrokken model wordt daarna een uur overgeslagen.
-   - Optioneel stel je een eigen voorkeursvolgorde in met het secret `GEMINI_MODELLEN`, bijvoorbeeld `gemini-3.6-flash,gemini-3.5-flash`.
+     - De functie probeert eerst `gpt-5-mini`, daarna `gpt-4.1-mini` en `gpt-4o-mini` (maximaal 4 pogingen).
+     - Ze schakelt naar het volgende model als een model niet beschikbaar is, de limiet heeft bereikt, overbelast is of niet op tijd reageert. Een model dat niet bestaat of geen toegang geeft, wordt daarna een uur overgeslagen.
+   - Optioneel stel je een eigen voorkeursvolgorde in met het secret `OPENAI_MODELLEN`, bijvoorbeeld `gpt-5-mini,gpt-4.1-mini`. Kies modellen met beeld/PDF-invoer en Structured Outputs.
+   - HEIC-foto's worden door OpenAI niet ondersteund; upload JPG, PNG, WEBP of PDF.
 7. **Edge Function deployen** (vanuit deze map, commando's één voor één):
    ```powershell
    npx.cmd supabase login
@@ -197,7 +197,7 @@ Bij elke opgeslagen factuur plant de database de controles in; de worker voert z
 Facturen die naar het ontvangstadres worden gemaild, komen automatisch binnen (pagina **Inbox**):
 
 - **Bekende afzender** (staat bij *Vertrouwde afzenders* én SPF of DKIM geslaagd volgens Mailgun): elke pdf of foto wordt
-  gescand (Gemini, dezelfde scan als bij uploaden) en wordt een factuur met status *Gescand*, gemarkeerd met "mail".
+  gescand (OpenAI, dezelfde scan als bij uploaden) en wordt een factuur met status *Gescand*, gemarkeerd met "mail".
   "Ingevoerd door" blijft leeg; een mens controleert, een ander keurt goed (functiescheiding en limiet gelden gewoon).
 - **Onbekende afzender** (of SPF/DKIM mislukt, of spam): de mail wacht in de inbox op een controller of beheerder:
   *Verwerken* (eventueel het adres vertrouwen) of *Weigeren* (met reden).
@@ -208,7 +208,7 @@ Facturen die naar het ontvangstadres worden gemaild, komen automatisch binnen (p
 
 **Mock-modus** (standaard): echte mail wordt geweigerd; op de pagina Inbox staan knoppen *Testmail van bekende afzender*
 en *Testmail van onbekende afzender*. Die maken een mail met een echte PDF-factuur (elke keer een ander nummer) en sturen
-die door dezelfde verwerking. Zonder `GEMINI_API_KEY` (of met `SCAN_MODUS=mock`) gebruikt de scan de gegevens uit het PDF.
+die door dezelfde verwerking. Zonder `OPENAI_API_KEY` (of met `SCAN_MODUS=mock`) gebruikt de scan de gegevens uit het PDF.
 Stel eerst een ontvangstadres in (in mock-modus mag dat elk adres zijn).
 
 **Live instellen (Mailgun, gratis plan: 1 domein, 1 inbound route, 100 mails/dag):**

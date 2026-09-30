@@ -66,7 +66,7 @@ const SCAN = {
 
 async function maakFactuur(bijlageId: string, factuur: object = SCAN): Promise<{ status: string; factuur_id: string }> {
   await alsServiceRole(db);
-  return waarde(db, "select public.maak_factuur_uit_inbox($1, $1, $2::jsonb, $3, 'gemini-test', null)", [
+  return waarde(db, "select public.maak_factuur_uit_inbox($1, $1, $2::jsonb, $3, 'openai-test', null)", [
     bijlageId, JSON.stringify(factuur), `${org}/${bijlageId}/factuur.pdf`,
   ]);
 }

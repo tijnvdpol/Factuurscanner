@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { maakPrompt, maakResponseSchema, normaliseerCodering } from "../../supabase/functions/_shared/gemini.ts";
+import { maakPrompt, maakResponseSchema, normaliseerCodering } from "../../supabase/functions/_shared/scanSchema.ts";
 
 const rekeningen = [
   { id: "ict", code: "4400", omschrijving: "ICT en software" },

@@ -3,10 +3,10 @@ import type { FactuurData } from "../types";
 import type { AiVoorstel } from "./codering";
 import { supabase } from "./supabase";
 
-// De Gemini-aanroep (prompt, schema, API-sleutel en modelkeuze met automatische fallback) draait
+// De OpenAI-aanroep (prompt, schema, API-sleutel en modelkeuze met automatische fallback) draait
 // server-side in de Edge Function supabase/functions/scan-factuur. Hier alleen de aanroep vanuit de frontend.
 
-export class GeminiError extends Error {}
+export class ScanError extends Error {}
 
 interface ScanAntwoord {
   factuur: FactuurData;
@@ -40,7 +40,7 @@ export async function scanFactuur(bestandPad: string, organisatieId: string): Pr
     body: { bestand_pad: bestandPad, organisatie_id: organisatieId },
   });
   if (error || !data) {
-    throw new GeminiError(await foutmeldingUit(error));
+    throw new ScanError(await foutmeldingUit(error));
   }
   return data;
 }

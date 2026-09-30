@@ -88,8 +88,8 @@ Per keuze: **wat** er gekozen is, **waarom**, en welk **alternatief** is afgewog
 - **Wat:** er is geen DELETE-recht. Inactieve rekeningen worden niet voorgesteld en niet in de keuzelijst getoond, behalve als de factuur er al aan gekoppeld is.
 - **Waarom:** oude facturen, de CSV-export en de audit trail houden zo een geldige codering.
 
-### B19. Historievoorstel via RPC vanuit de frontend, AI-voorstel in dezelfde Gemini-aanroep
-- **Wat:** `scan-factuur` haalt de actieve rekeningen op met de JWT van de gebruiker (RLS), zet ze in de prompt en laat Gemini een `grootboek_code` + `grootboek_zekerheid` kiezen in dezelfde aanroep als de extractie. Onbekende codes worden genegeerd. Na de scan vraagt de frontend `stel_codering_voor(leverancier)` op. Historie gaat vóór AI (`kiesCoderingsvoorstel`, pure functie).
+### B19. Historievoorstel via RPC vanuit de frontend, AI-voorstel in dezelfde OpenAI-aanroep
+- **Wat:** `scan-factuur` haalt de actieve rekeningen op met de JWT van de gebruiker (RLS), zet ze in de prompt en laat OpenAI een `grootboek_code` + `grootboek_zekerheid` kiezen in dezelfde aanroep als de extractie. Onbekende codes worden genegeerd. Na de scan vraagt de frontend `stel_codering_voor(leverancier)` op. Historie gaat vóór AI (`kiesCoderingsvoorstel`, pure functie).
 - **Waarom:** de leverancier is pas na de scan bekend. Een aparte AI-aanroep kost extra tijd en quota. De keuze tussen historie en AI in een pure functie is eenvoudig te testen.
 - **Alternatief:** de historie in de Edge Function opzoeken. Dat kan, maar dan staat dezelfde logica op twee plekken (ook bij het openen van een ongecodeerde factuur is een historievoorstel nodig).
 - **Veiligheid:** omschrijvingen van rekeningen (gebruikersinvoer) gaan zonder regeleinden en backticks, en maximaal 100 tekens, de prompt in.
@@ -390,7 +390,7 @@ betaalbatch of na export inhoudelijk vergrendeld; de knop goedgekeurd → betaal
 - **Wat:** `inbound-mail` controleert de handtekening, registreert de mail, zet bruikbare bijlagen in Storage
   (`{organisatie_id}/inbox/{bericht_id}/…`) en antwoordt meteen. Per bijlage volgt een `mailbox`-taak die scant en de
   factuur maakt.
-- **Waarom:** scannen met Gemini duurt tot een minuut per bijlage; een webhook die lang duurt, laat Mailgun opnieuw
+- **Waarom:** scannen met OpenAI duurt tot een minuut per bijlage; een webhook die lang duurt, laat Mailgun opnieuw
   proberen. Via de wachtrij krijgt het scannen ook retries en een zichtbare status.
 - **Antwoordcodes:** 200 (verwerkt of al ontvangen), 406 (onbekend adres, mock-modus, onleesbaar: niet opnieuw proberen),
   401 (handtekening), 500 (tijdelijk: Mailgun probeert het tot 8 uur opnieuw).
@@ -429,11 +429,11 @@ betaalbatch of na export inhoudelijk vergrendeld; de knop goedgekeurd → betaal
 - **Wat:** in mock-modus weigert `inbound-mail` echte mail (406) en maakt `koppeling-actie` (`simuleer_mail`) een mail met een
   echt PDF (gegenereerd, elke keer een ander factuurnummer). Die gaat door `verwerkMail`, dezelfde functie als de webhook.
   Bij "bekende afzender" wordt het testdomein aan de vertrouwde afzenders toegevoegd (zichtbaar en gelogd).
-- **Scan:** met `GEMINI_API_KEY` scant Gemini het test-PDF echt; zonder sleutel of met `SCAN_MODUS=mock` gebruikt de mock-scan
+- **Scan:** met `OPENAI_API_KEY` scant OpenAI het test-PDF echt; zonder sleutel of met `SCAN_MODUS=mock` gebruikt de mock-scan
   de gegevens die in het PDF staan. Zo werkt de mock zonder enig extern account.
 
-### B72. Gemini-scan gedeeld door upload en mailbox
-- **Wat:** de modelkeuze, fallback en foutvertaling van `scan-factuur` staan nu in `_shared/geminiScan.ts`; `scan-factuur` en
+### B72. OpenAI-scan gedeeld door upload en mailbox
+- **Wat:** de modelkeuze, fallback en foutvertaling van `scan-factuur` staan nu in `_shared/openaiScan.ts`; `scan-factuur` en
   de worker gebruiken dezelfde functie. Meldingen en gedrag van `scan-factuur` zijn ongewijzigd.
 - **Waarom:** de opdracht eist dat bijlagen "door dezelfde scan- en controlepipeline" gaan; twee kopieën zouden uit elkaar
   gaan lopen. De worker gebruikt een kleiner tijdbudget (55 s) om binnen de looptijd van de functie te blijven.

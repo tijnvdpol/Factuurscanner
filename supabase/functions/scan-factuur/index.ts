@@ -1,4 +1,4 @@
-// Edge Function scan-factuur: leest een factuurbestand uit Storage en laat Gemini de velden herkennen.
+// Edge Function scan-factuur: leest een factuurbestand uit Storage en laat OpenAI de velden herkennen.
 //
 // POST { bestand_pad: string, organisatie_id?: string }
 //   bestand_pad = {organisatie_id}/{factuur_id}/{bestand} (of het oude {user_id}/…); toegang bepalen de
@@ -9,15 +9,15 @@
 //       uit de actieve rekeningen van de gebruiker (met zekerheid 0–1), of null.
 //   4xx/5xx { error: string }  (Nederlandse foutmelding voor de gebruiker)
 //
-// De Gemini-aanroep (modelkeuze met automatische fallback) staat in _shared/geminiScan.ts, zodat de
+// De OpenAI-aanroep (modelkeuze met automatische fallback) staat in _shared/openaiScan.ts, zodat de
 // mailbox-import (verwerk-taken) exact dezelfde pipeline gebruikt.
 //
-// Secrets: GEMINI_API_KEY (zelf instellen), optioneel GEMINI_MODELLEN (kommagescheiden voorkeursvolgorde).
+// Secrets: OPENAI_API_KEY (zelf instellen), optioneel OPENAI_MODELLEN (kommagescheiden voorkeursvolgorde).
 // SUPABASE_URL en SUPABASE_ANON_KEY zet Supabase automatisch.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
-import type { Rekening } from "../_shared/gemini.ts";
-import { mimeTypeVoor, scanMetGemini } from "../_shared/geminiScan.ts";
+import type { Rekening } from "../_shared/scanSchema.ts";
+import { mimeTypeVoor, scanMetOpenAI } from "../_shared/openaiScan.ts";
 
 const BUCKET = "facturen";
 const MAX_BYTES = 15 * 1024 * 1024;
@@ -46,16 +46,16 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS_HEADERS });
   if (req.method !== "POST") return fout(405, "Methode niet toegestaan.");
 
-  const geminiKey = Deno.env.get("GEMINI_API_KEY");
+  const openaiKey = Deno.env.get("OPENAI_API_KEY");
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? req.headers.get("apikey");
-  if (!geminiKey || !supabaseUrl || !anonKey) {
+  if (!openaiKey || !supabaseUrl || !anonKey) {
     console.error("Configuratie ontbreekt", {
-      GEMINI_API_KEY: !!geminiKey,
+      OPENAI_API_KEY: !!openaiKey,
       SUPABASE_URL: !!supabaseUrl,
       SUPABASE_ANON_KEY: !!anonKey,
     });
-    return fout(500, "De scanservice is niet goed geconfigureerd (ontbreekt de GEMINI_API_KEY?).");
+    return fout(500, "De scanservice is niet goed geconfigureerd (ontbreekt de OPENAI_API_KEY?).");
   }
 
   // 1. JWT van de gebruiker controleren (via de Auth-server; werkt met oude én nieuwe JWT-sleutels)
@@ -107,12 +107,12 @@ Deno.serve(async (req) => {
   if (rekeningFout) console.warn("Grootboekrekeningen ophalen mislukt:", rekeningFout.message);
   const rekeningen: Rekening[] = rekeningData ?? [];
 
-  // 4. Gemini aanroepen; bij een onbereikbaar model automatisch het volgende proberen
-  const uitkomst = await scanMetGemini({
+  // 4. OpenAI aanroepen; bij een onbereikbaar model automatisch het volgende proberen
+  const uitkomst = await scanMetOpenAI({
     bytes: new Uint8Array(await blob.arrayBuffer()),
     mimeType: mimeTypeVoor(pad, blob.type),
     rekeningen,
-    geminiKey,
+    openaiKey,
     start,
     tijdbudgetMs: TIJDBUDGET_MS,
   });

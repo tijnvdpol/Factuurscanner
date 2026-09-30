@@ -13,8 +13,8 @@ import { mailTokenSleutel } from "../_shared/koppelingen/mailtoken.ts";
 import { boekhoudHandler } from "../_shared/koppelingen/boekhouding.ts";
 import { kiesBoekhoudProvider } from "../_shared/koppelingen/boekhoudProvider.ts";
 import { BankMock, betalingHandler } from "../_shared/koppelingen/bank.ts";
-import { mimeTypeVoor, scanMetGemini } from "../_shared/geminiScan.ts";
-import type { Rekening } from "../_shared/gemini.ts";
+import { mimeTypeVoor, scanMetOpenAI } from "../_shared/openaiScan.ts";
+import type { Rekening } from "../_shared/scanSchema.ts";
 
 const BUCKET = "facturen";
 /** Maximale scantijd per bijlage in de worker (de worker zelf heeft een beperkte looptijd). */
@@ -38,9 +38,9 @@ function resendLive(): ResendLive {
   return new ResendLive(sleutel, afzender);
 }
 
-/** Scannen zonder Gemini: als SCAN_MODUS=mock, of als er geen GEMINI_API_KEY is. */
+/** Scannen zonder OpenAI: als SCAN_MODUS=mock, of als er geen OPENAI_API_KEY is. */
 export function scanIsMock(): boolean {
-  return Deno.env.get("SCAN_MODUS")?.trim().toLowerCase() === "mock" || !Deno.env.get("GEMINI_API_KEY");
+  return Deno.env.get("SCAN_MODUS")?.trim().toLowerCase() === "mock" || !Deno.env.get("OPENAI_API_KEY");
 }
 
 function mailboxDeps(supabase: SupabaseClient) {
@@ -80,11 +80,11 @@ function mailboxDeps(supabase: SupabaseClient) {
         .eq("organisatie_id", bijlage.organisatie_id)
         .eq("actief", true)
         .order("code");
-      return scanMetGemini({
+      return scanMetOpenAI({
         bytes: inhoud,
         mimeType: mimeTypeVoor(bijlage.bestandsnaam, bijlage.mime_type ?? ""),
         rekeningen: (rekeningen ?? []) as Rekening[],
-        geminiKey: Deno.env.get("GEMINI_API_KEY")!,
+        openaiKey: Deno.env.get("OPENAI_API_KEY")!,
         start: Date.now(),
         tijdbudgetMs: SCAN_BUDGET_MS,
       });

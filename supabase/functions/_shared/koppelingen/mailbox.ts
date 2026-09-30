@@ -7,7 +7,7 @@
 // content-id-map, timestamp, token en signature. Handtekening = hex(HMAC-SHA256(signing key, timestamp + token)).
 // Antwoord 200 = verwerkt, 406 = geweigerd (geen retry), anders probeert Mailgun het tot 8 uur opnieuw.
 
-import type { FactuurData } from "../gemini.ts";
+import type { FactuurData } from "../scanSchema.ts";
 import { DefinitieveFout, type TaakHandler } from "./taken.ts";
 
 export const MAX_BIJLAGE_BYTES = 15 * 1024 * 1024;
@@ -329,7 +329,7 @@ export function mailboxHandler(d: MailboxTaakDeps): TaakHandler {
 }
 
 // ---------------------------------------------------------------------------
-// Mock-scan (geen Gemini nodig)
+// Mock-scan (geen OpenAI nodig)
 // ---------------------------------------------------------------------------
 
 /** Gegevens uit het voorbeeld-PDF (gesimuleerde mail), of herkenbare testgegevens voor een andere bijlage. */

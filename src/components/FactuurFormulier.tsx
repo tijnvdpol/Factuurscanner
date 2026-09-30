@@ -16,7 +16,7 @@ interface Props {
   onOpslaan: () => void;
   onAnnuleren: () => void;
   bestandsnaam?: string;
-  /** Het Gemini-model dat de factuur heeft herkend (automatisch gekozen door de server). */
+  /** Het AI-model dat de factuur heeft herkend (automatisch gekozen door de server). */
   aiModel?: string;
   onBekijkOrigineel?: () => void;
   bewerken: boolean;

@@ -10,7 +10,7 @@ import type { WeergaveContext } from "../lib/audit";
 import { voorspelSignalen } from "../lib/signalen";
 import { kiesCoderingsvoorstel } from "../lib/codering";
 import { haalHistorieVoorstel } from "../lib/grootboekApi";
-import { GeminiError, scanFactuur } from "../lib/gemini";
+import { ScanError, scanFactuur } from "../lib/scan";
 import { valideerFactuur } from "../lib/validatie";
 import { OpslagError, openOrigineel, uploadFactuurBestand, verwijderBestand } from "../lib/opslag";
 import {
@@ -77,7 +77,7 @@ function laadLokaleFacturen(): Factuur[] {
 }
 
 function foutTekst(err: unknown, standaard: string): string {
-  return err instanceof DbError || err instanceof GeminiError || err instanceof OpslagError ? err.message : standaard;
+  return err instanceof DbError || err instanceof ScanError || err instanceof OpslagError ? err.message : standaard;
 }
 
 interface Concept {

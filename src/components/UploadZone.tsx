@@ -5,7 +5,7 @@ interface Props {
   bezig: boolean;
 }
 
-const TOEGESTAAN = ["image/jpeg", "image/png", "image/webp", "image/heic", "application/pdf"];
+const TOEGESTAAN = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
 
 export default function UploadZone({ onFile, bezig }: Props) {
   const [sleept, setSleept] = useState(false);
@@ -15,8 +15,8 @@ export default function UploadZone({ onFile, bezig }: Props) {
   const verwerkBestanden = (lijst: FileList | null) => {
     if (!lijst || lijst.length === 0) return;
     const bestand = lijst[0];
-    if (!TOEGESTAAN.includes(bestand.type) && !bestand.type.startsWith("image/")) {
-      window.alert("Alleen afbeeldingen (JPG, PNG, WEBP, HEIC) of PDF worden ondersteund.");
+    if (!TOEGESTAAN.includes(bestand.type)) {
+      window.alert("Alleen afbeeldingen (JPG, PNG, WEBP) of PDF worden ondersteund.");
       return;
     }
     onFile(bestand);

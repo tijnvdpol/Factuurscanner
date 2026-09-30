@@ -1,8 +1,8 @@
 // Testmail voor de mock-modus van de mailbox: een realistische mail met een echte PDF-factuur als bijlage.
 // Het PDF wordt hier gemaakt (één pagina, standaardlettertype), met elke keer een ander factuurnummer, zodat
-// dezelfde pipeline (opslaan, scannen, controleren) ermee werkt, ook met Gemini. Geen imports buiten deze map.
+// dezelfde pipeline (opslaan, scannen, controleren) ermee werkt, ook met OpenAI. Geen imports buiten deze map.
 
-import type { FactuurData } from "../gemini.ts";
+import type { FactuurData } from "../scanSchema.ts";
 import type { Mail } from "./mailbox.ts";
 
 export type TestmailSoort = "bekend" | "onbekend";

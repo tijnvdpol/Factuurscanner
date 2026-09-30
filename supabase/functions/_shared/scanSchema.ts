@@ -1,4 +1,4 @@
-// Gemini-prompt, responsschema en normalisatie van het antwoord (overgenomen uit de frontend).
+// Scanprompt, responsschema en normalisatie van het antwoord (overgenomen uit de frontend).
 // Houd FactuurData gelijk aan src/types.ts. Dit bestand heeft geen imports, zodat de frontend-tests
 // (Vitest) het ook kunnen testen.
 
@@ -22,7 +22,7 @@ export interface FactuurData {
   kvk_nummer: string | null;
 }
 
-/** Een actieve grootboekrekening waaruit Gemini een keuze mag maken. */
+/** Een actieve grootboekrekening waaruit het AI-model een keuze mag maken. */
 export interface Rekening {
   id: string;
   code: string;
@@ -35,39 +35,41 @@ export interface AiCodering {
   zekerheid: number;
 }
 
+// JSON-schema voor OpenAI Structured Outputs (strict): alle velden verplicht, optionele waarden als ["type", "null"],
+// geen extra velden toegestaan.
 const RESPONSE_SCHEMA = {
-  type: "OBJECT",
+  type: "object",
+  additionalProperties: false,
   properties: {
-    leverancier: { type: "STRING", nullable: true, description: "Naam van de leverancier/verkoper." },
-    factuurnummer: { type: "STRING", nullable: true },
-    factuurdatum: { type: "STRING", nullable: true, description: "Datum in formaat YYYY-MM-DD." },
+    leverancier: { type: ["string", "null"], description: "Naam van de leverancier/verkoper." },
+    factuurnummer: { type: ["string", "null"] },
+    factuurdatum: { type: ["string", "null"], description: "Datum in formaat YYYY-MM-DD." },
     vervaldatum: {
-      type: "STRING",
-      nullable: true,
+      type: ["string", "null"],
       description: "Uiterste betaaldatum in formaat YYYY-MM-DD, alleen als die als datum op de factuur staat.",
     },
-    bedrag_excl: { type: "NUMBER", nullable: true, description: "Totaalbedrag exclusief BTW." },
+    bedrag_excl: { type: ["number", "null"], description: "Totaalbedrag exclusief BTW." },
     btw_regels: {
-      type: "ARRAY",
+      type: "array",
       items: {
-        type: "OBJECT",
+        type: "object",
+        additionalProperties: false,
         properties: {
-          tarief: { type: "NUMBER", nullable: true, description: "BTW-tarief in procenten, bijv. 21." },
-          grondslag: { type: "NUMBER", nullable: true, description: "Grondslag voor dit tarief." },
-          btw_bedrag: { type: "NUMBER", nullable: true, description: "BTW-bedrag voor dit tarief." },
+          tarief: { type: ["number", "null"], description: "BTW-tarief in procenten, bijv. 21." },
+          grondslag: { type: ["number", "null"], description: "Grondslag voor dit tarief." },
+          btw_bedrag: { type: ["number", "null"], description: "BTW-bedrag voor dit tarief." },
         },
         required: ["tarief", "grondslag", "btw_bedrag"],
       },
     },
-    totaal_incl: { type: "NUMBER", nullable: true, description: "Totaalbedrag inclusief BTW." },
-    valuta: { type: "STRING", nullable: true, description: "ISO valutacode, bijv. EUR." },
-    iban: { type: "STRING", nullable: true, description: "IBAN van de leverancier waarop betaald moet worden." },
+    totaal_incl: { type: ["number", "null"], description: "Totaalbedrag inclusief BTW." },
+    valuta: { type: ["string", "null"], description: "ISO valutacode, bijv. EUR." },
+    iban: { type: ["string", "null"], description: "IBAN van de leverancier waarop betaald moet worden." },
     btw_nummer: {
-      type: "STRING",
-      nullable: true,
+      type: ["string", "null"],
       description: "BTW-identificatienummer van de leverancier, bijv. NL123456789B01.",
     },
-    kvk_nummer: { type: "STRING", nullable: true, description: "KvK-nummer van de leverancier (8 cijfers)." },
+    kvk_nummer: { type: ["string", "null"], description: "KvK-nummer van de leverancier (8 cijfers)." },
   },
   required: [
     "leverancier",
@@ -92,13 +94,11 @@ export function maakResponseSchema(rekeningen: Rekening[]) {
     properties: {
       ...RESPONSE_SCHEMA.properties,
       grootboek_code: {
-        type: "STRING",
-        nullable: true,
+        type: ["string", "null"],
         description: "Code van de best passende grootboekrekening uit de lijst in de instructies, of null.",
       },
       grootboek_zekerheid: {
-        type: "NUMBER",
-        nullable: true,
+        type: ["number", "null"],
         description: "Hoe zeker je bent van de gekozen grootboekrekening, van 0 (gok) tot 1 (zeker).",
       },
     },
@@ -156,7 +156,7 @@ function getalOfNull(waarde: unknown): number | null {
   return typeof waarde === "number" && Number.isFinite(waarde) ? waarde : null;
 }
 
-/** Zet het (ongetypeerde) Gemini-antwoord om naar FactuurData; ontbrekende of verkeerde velden worden null. */
+/** Zet het (ongetypeerde) AI-antwoord om naar FactuurData; ontbrekende of verkeerde velden worden null. */
 export function normaliseerFactuur(geparsed: unknown): FactuurData {
   const r = (geparsed ?? {}) as Record<string, unknown>;
   return {
